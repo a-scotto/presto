@@ -51,8 +51,9 @@ class LimitedMemoryPreconditioner(LinearMap):
 
 if __name__ == "__main__":
 
-    from numpy.linalg import norm
+    import numpy
     from linear_map import Matrix
+    from utils import qr, norm
 
     size = 100
 

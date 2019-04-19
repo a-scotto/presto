@@ -313,7 +313,7 @@ class UpperTriangularMap(LinearMap):
         n, _ = self.shape
         ret = numpy.zeros_like(X)
         for i in range(n):
-            ret[i, :] = self._T[i:(i + 1), i:] @ X[i:, :]
+            ret[i, :] = self._T[[i], i:] @ X[i:, :]
         return ret
 
     def _dot_adj(self, X):
