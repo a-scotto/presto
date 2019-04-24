@@ -10,11 +10,20 @@ Description:
 """
 
 import numpy
+import scipy
+
+from utils import qr, convert_to_col
 
 
 class LinearMapError(Exception):
     """
     Exception raised when LinearMap object encounters specific errors.
+    """
+
+
+class ProjectorError(Exception):
+    """
+    Exception raised when Projector object encounters specific errors.
     """
 
 
@@ -103,6 +112,27 @@ class LinearMap(object):
         return self + (-B)
 
 
+class LinearMapInverse(LinearMap):
+
+    def __init__(self, A):
+
+        if not isinstance(A, LinearMap):
+            raise LinearMapError('Requires a Matrix object for solving.')
+
+        if A.shape[0] != A.shape[1]:
+            raise LinearMapError('Impossible to solve non square Matrix.')
+
+        super().__init__(A.shape, A.dtype, self._dot, self._dot_adj)
+
+        self._A = A.canonical_repr()
+
+    def _dot(self, X):
+        return numpy.linalg.solve(self._A, X)
+
+    def _dot_adj(self, X):
+        return numpy.linalg.solve(self._A.T.conj(), X)
+
+
 class _ScaleLinearMap(LinearMap):
 
     def __init__(self, A, scalar):
@@ -183,27 +213,6 @@ class _AdjointLinearMap(LinearMap):
         n, p = A.shape
 
         super().__init__((p, n), A.dtype, A._dot_adj, A._dot)
-
-
-class SolvedLinearMap(LinearMap):
-
-    def __init__(self, A):
-
-        if not isinstance(A, LinearMap):
-            raise LinearMapError('Requires a Matrix object for solving.')
-
-        if A.shape[0] != A.shape[1]:
-            raise LinearMapError('Impossible to solve non square Matrix.')
-
-        super().__init__(A.shape, A.dtype, self._dot, self._dot_adj)
-
-        self._A = A.canonical_repr()
-
-    def _dot(self, X):
-        return numpy.linalg.solve(self._A, X)
-
-    def _dot_adj(self, X):
-        return numpy.linalg.solve(self._A.T.conj(), X)
 
 
 class Matrix(LinearMap):
@@ -354,198 +363,88 @@ class SelfAdjointMap(LinearMap):
         return self._A.__repr__()
 
 
+class Projector(LinearMap):
+    """
+    Abstract class for projectors. In the initialization of the Projector, X denotes the range
+    and Y denotes the orthogonal complement of the kernel. The matrix formulation is:
+
+    P = X * ( Y^T * X)^{-1} * Y^T
+
+    """
+
+    def __init__(self, X, Y=None, orthogonalize=True):
+
+        if not isinstance(X, numpy.ndarray) or (Y is not None and not isinstance(Y, numpy.ndarray)):
+            raise ProjectorError('Projector must be a numpy.ndarray')
+
+        X = convert_to_col(X)
+        Y = X if Y is None else convert_to_col(Y)
+
+        if X.shape != Y.shape:
+            raise ProjectorError('Projector range and kernel orthogonal must have same dimension.')
+
+        shape = (X.shape[0], X.shape[0])
+        dtype = numpy.find_common_type([X.dtype, Y.dtype], [])
+
+        super().__init__(shape, dtype, self._dot, self._dot_adj)
+
+        # If orthogonal projector
+        if Y is X:
+            if orthogonalize:
+                self.V, self.R_v = scipy.linalg.qr(X)
+            else:
+                self.V, self.R_v = X, None
+
+            self.W, self.R_w = self.V, self.R_v
+
+            self.Q, self.R = None, None
+
+        # If oblique projector
+        else:
+            if orthogonalize:
+                self.V, self.R_v = scipy.linalg.qr(X)
+                self.W, self.R_w = scipy.linalg.qr(Y)
+            else:
+                self.V, self.R_v = X, None
+                self.W, self.R_w = Y, None
+
+            self.W, self.R_w = self.V, self.R_v
+
+            self.Q, self.R = scipy.linalg.qr(self.W.T.dot(self.V))
+
+    def _dot(self, X):
+        # If orthogonal projector
+        if self.Q is None:
+            return self.V.dot(self.W.T.dot(X))
+        # If oblique projector
+        else:
+            return self.V.dot(scipy.linalg.solve_triangular(self.R, self.Q.T.dot(self.W.T.dot(X))))
+
+    def _dot_adj(self, X):
+        # If orthogonal projector
+        if self.Q is None:
+            return self.W.dot(self.V.T.dot(X))
+        # If oblique projector
+        else:
+            return self.W.dot(self.Q(scipy.linalg.solve_triangular(self.R,
+                                                                   self.V.T.dot(X),
+                                                                   lower=True)))
+
+
 if __name__ == "__main__":
 
-    import copy
-    from time import time
-    from numpy.linalg import norm, qr
+    S = numpy.random.rand(10, 3)
+    S, _ = scipy.linalg.qr(S)
 
-    size = 100
+    S_orth = numpy.random.rand(10, 3)
+    S_orth -= S.dot(S.T.dot(S_orth))
 
-    diag = [i + 1 for i in range(size)]
+    P = Projector(S)
 
-    a = numpy.random.randint(0, size, size=(size, size))
-    A = Matrix(a)
+    print(numpy.linalg.norm(P.dot(S) - S))
+    print(numpy.linalg.norm(P.dot(S_orth)))
 
-    d = numpy.diag(diag)
-    D = DiagonalMap(diag)
+    P_s = P.adjoint()
 
-    r = numpy.triu(numpy.ones_like(a)) / size
-    R = UpperTriangularMap(r)
-
-    b = numpy.ones((size, 1))
-
-    # ################### MATRIX #######################
-    # ##################################################
-    print('~ MATRIX-VECTOR product validation')
-    t = time()
-    p = a.dot(b)
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    t = time()
-    P = A.dot(b)
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    print('{:1.2e}'.format(norm(p - P)))
-    t = time()
-    p = a.T.dot(b)
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    t = time()
-    P = A.dot_adj(b)
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    print('{:1.2e}'.format(norm(p - P)))
-
-    print('~ MATRIX-MATRIX product validation')
-    t = time()
-    p = a.dot(a.dot(b))
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    t = time()
-    P = (A * A).dot(b)
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    print('{:1.2e}'.format(norm(p - P)))
-    t = time()
-    p = a.T.dot(a.T.dot(b))
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    t = time()
-    P = (A * A).dot_adj(b)
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    print('{:1.2e}'.format(norm(p - P)))
-
-    print()
-    # ################## DIAGONAL ######################
-    # ##################################################
-    print('~ DIAGONAL-VECTOR product validation')
-    t = time()
-    p = d.dot(b)
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    t = time()
-    P = D.dot(b)
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    print('{:1.2e}'.format(norm(p - P)))
-    t = time()
-    p = d.T.dot(b)
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    t = time()
-    P = D.dot_adj(b)
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    print('{:1.2e}'.format(norm(p - P)))
-
-    print('~ DIAGONAL-MATRIX product validation')
-    t = time()
-    p = d.dot(a.dot(b))
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    t = time()
-    P = (D * A).dot(b)
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    print('{:1.2e}'.format(norm(p - P)))
-    t = time()
-    p = a.T.dot(d.T.dot(b))
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    t = time()
-    P = (D * A).dot_adj(b)
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    print('{:1.2e}'.format(norm(p - P)))
-
-    print()
-    # ############### UPPER TRIANGLE ###################
-    # ##################################################
-    a = numpy.ones_like(r)
-    A = Matrix(a)
-    print('~ UPPER TRIANGLE-VECTOR product validation')
-    t = time()
-    p = r.dot(b)
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    t = time()
-    P = R.dot(b)
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    print('{:1.2e}'.format(norm(p - P)))
-    e = numpy.asarray([(size - i) / size for i in range(size)]).reshape(size, 1)
-    print('{:1.2e} | {:1.2e} | Exact solution distance'.format(norm(p - e), norm(P - e)))
-
-    t = time()
-    p = r.T.dot(b)
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    t = time()
-    P = R.dot_adj(b)
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    print('{:1.2e}'.format(norm(p - P)))
-    e = numpy.asarray([(i + 1) / size for i in range(size)]).reshape(size, 1)
-    print('{:1.2e} | {:1.2e} | Exact solution distance'.format(norm(p - e), norm(P - e)))
-
-    print('~ UPPER TRIANGLE-MATRIX product validation')
-    t = time()
-    p = r.dot(a.dot(b))
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    t = time()
-    P = (R * A).dot(b)
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    print('{:1.2e}'.format(norm(p - P)))
-    e = size * numpy.asarray([(size - i) / size for i in range(size)]).reshape(size, 1)
-    print('{:1.2e} | {:1.2e} | Exact solution distance'.format(norm(p - e), norm(P - e)))
-
-    t = time()
-    p = a.T.dot(r.T.dot(b))
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    t = time()
-    P = (R * A).dot_adj(b)
-    print('{:1.2e} |'.format(time() - t), end=' ')
-    print('{:1.2e}'.format(norm(p - P)))
-    e = 0.5 * size * numpy.ones(size) + 0.5
-    print('{:1.2e} | {:1.2e} | Exact solution distance'.format(norm(p - e), norm(P - e)))
-
-    print()
-
-    # q, _ = qr(a)
-    # s = q.dot(d.dot(q.T))
-    # s_copy = copy
-    # S = SelfAdjointMap(s)
-    #
-    # ################# SDP MATRIX #####################
-    # ##################################################
-    # b = q[:, -1:]
-    # print('~ SELF ADJOINT-VECTOR product validation')
-    # t = time()
-    # p = s.dot(b)
-    # print('{:1.2e}'.format(time() - t), end=' ')
-    # t = time()
-    # P = S.dot(b)
-    # print('{:1.2e}'.format(time() - t), end=' ')
-    # print(norm(p - P))
-    # e = size * b
-    # print('Residual to exact solution {:1.2e}  |  {:1.2e}'
-    #       .format(norm(p - e), norm(P - e)))
-    # t = time()
-    # p = s.T.dot(b)
-    # print('{:1.2e}'.format(time() - t), end=' ')
-    # t = time()
-    # P = S.dot_adj(b)
-    # print('{:1.2e}'.format(time() - t), end=' ')
-    # print(norm(p - P))
-    # e = size * b
-    # print('Residual to exact solution {:1.2e}  |  {:1.2e}'
-    #       .format(norm(p - e), norm(P - e)))
-    # print()
-    #
-    # print('~ SELF ADJOINT-MATRIX product validation')
-    # Q = Matrix(q)
-    # b = q[:, -1:]
-    # t = time()
-    # p = q.T.dot(s.dot(b))
-    # print('{:1.2e}'.format(time() - t), end=' ')
-    # t = time()
-    # P = (Q.adjoint() * S).dot(b)
-    # print('{:1.2e}'.format(time() - t), end=' ')
-    # print(norm(p - P))
-    # e = d[:, -1:]
-    # print('Residual to exact solution {:1.2e}  |  {:1.2e}'
-    #       .format(norm(p - e), norm(P - e)))
-    #
-    # b = q.T[:, -1:]
-    # t = time()
-    # p = s.T.dot(q.dot(b))
-    # print('{:1.2e}'.format(time() - t), end=' ')
-    # t = time()
-    # P = (Q.adjoint() * S).dot_adj(b)
-    # print('{:1.2e}'.format(time() - t), end=' ')
-    # print(norm(p - P))
-    # e = s[-1:, :].T
-    # print('Residual to exact solution {:1.2e}  |  {:1.2e}'
-    #       .format(norm(p - e), norm(P - e)))
+    print(numpy.linalg.norm(P_s.dot(S_orth) - S_orth))
+    print(numpy.linalg.norm(P_s.dot(S)))
