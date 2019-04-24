@@ -11,7 +11,7 @@ Description:
 
 import numpy
 
-from linear_map import LinearMap, LinearMapError, IdentityMap, SolvedLinearMap
+from linear_map import LinearMap, LinearMapError, IdentityMap, LinearMapInverse
 
 
 class LimitedMemoryPreconditioner(LinearMap):
@@ -36,7 +36,7 @@ class LimitedMemoryPreconditioner(LinearMap):
 
         Y = self._S.dot_adj(X)
 
-        A_tilde = SolvedLinearMap(self._S.adjoint() * self._S_tilde)
+        A_tilde = LinearMapInverse(self._S.adjoint() * self._S_tilde)
 
         Z = A_tilde.dot(Y)
 
