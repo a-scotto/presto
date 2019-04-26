@@ -12,6 +12,7 @@ Description:
 import numpy
 import utils
 
+from matplotlib import pyplot
 from linear_map import LinearMap
 from matrix_operator import MatrixOperator, SelfAdjointMap
 
@@ -29,8 +30,13 @@ class LinearSolverError(Exception):
 
 
 class LinearSystem(object):
+    """
+    Abstract class to model linear systems.
+    """
 
-    def __init__(self, A, b,
+    def __init__(self,
+                 lin_op,
+                 lhs,
                  symmetric=False,
                  definite_positive=False):
 
@@ -38,42 +44,76 @@ class LinearSystem(object):
         self.definite_positive = definite_positive
 
         if self.symmetric:
-            self.A = SelfAdjointMap(A)
+            self.A = SelfAdjointMap(lin_op)
         else:
-            self.A = MatrixOperator(A)
+            self.A = MatrixOperator(lin_op)
 
-        if not isinstance(b, numpy.ndarray):
-            raise LinearSystemError('Linear system left-hand side must be numpy.ndarray')
+        # Verify consistency between the linear operator and the left-hand side shape
+        if not isinstance(lhs, numpy.ndarray):
+            raise LinearSystemError('LinearSystem left-hand side must be numpy.ndarray')
 
-        self.b = b
+        if lhs.shape[0] != A.shape[1]:
+            raise LinearSystemError('Linear map and left-hand side shapes do not match.')
 
-        self.shape = A.shape
-        self.dtype = A.dtype
+        self.b = lhs
+
+        self.block = False if self.b.shape[1] == 1 else True
+
+        self.shape = self.A.shape
+        self.dtype = numpy.find_common_type([self.A.dtype, self.b.dtype], [])
 
     def get_residual(self, x):
         return self.A.dot(x) - self.b
 
-    def left_precond(self, M):
-        self
-        return None
-
-    def right_precond(self, M):
-        self
-        return None
+    def __repr__(self):
+        _repr = 'Linear system of shape {} with left-hand side of shape {}.'\
+                .format(self.A.shape, self.b.shape)
+        return _repr
 
 
 class LinearSolver(object):
+    """
+    Abstract class to model linear systems.
+    """
 
-    def __init__(self, lin_sys, x_0=None, M=[], ip_B=None, tol=1e-5, maxiter=None):
+    def __init__(self,
+                 lin_sys,
+                 x_0=None,
+                 M=None,
+                 ip_B=None,
+                 tol=1e-5,
+                 maxiter=None):
+        """
+        Constructor of LinearSolver class. Instantiate a LinearSolver object.
 
+        :param lin_sys:
+        :param x_0:
+        :param M:
+        :param ip_B:
+        :param tol:
+        :param maxiter:
+        """
+
+        # Sanitize the initialization of class attributes
         if not isinstance(lin_sys, LinearSystem):
             raise LinearSolverError('LinearSolver requires a LinearSystem.')
 
-        if not isinstance(x_0, numpy.ndarray):
+        self.lin_sys = lin_sys
+
+        x_0 = numpy.zeros_like(lin_sys.b) if x_0 is None else x_0
+
+        if x_0 is not None and not isinstance(x_0, numpy.ndarray):
             raise LinearSolverError('Initial guess x_0 must be a numpy.ndarray.')
 
+        if x_0.shape != lin_sys.b.shape:
+            raise LinearSolverError('Shapes of initial guess x_0 and left-hand side b mismatch.')
+
+        self.x = x_0
+
+        M = [] if M is None else M
+
         if not isinstance(M, list):
-            raise LinearSolverError('The preconditioners must be provided as list.')
+            raise LinearSolverError('Non preconditioners must be provided as list.')
 
         for M_i in M:
             if not isinstance(M_i, LinearMap):
@@ -81,56 +121,83 @@ class LinearSolver(object):
             if M_i.shape != lin_sys.shape:
                 raise LinearSolverError('Preconditioners shape do not match.')
 
-        self.lin_sys = lin_sys
-        self.x = x_0
         self.M_i = M
+
+        if ip_B is not None and not (isinstance(ip_B, numpy.ndarray) or
+                                     isinstance(ip_B, SelfAdjointMap)):
+            raise LinearSystemError('Internal inner_product must be either SelfAdjointMap or '
+                                    'numpy.ndarray.')
+
+        if ip_B is not None and ip_B.shape != self.lin_sys.A.shape:
+            raise LinearSystemError('Internal inner product shape do not match LinearSystem one.')
+
         self.ip_B = ip_B
 
         self.tol = tol
         self.maxiter = maxiter
-
-        self.auxiliaries = self._initialize()
-        self.residue = utils.norm(self.lin_sys.get_residual(self.x), ip_B=ip_B)
-        self.result = LinearSolverResult(self)
+        self.output = self._initialize()
 
     def _initialize(self):
-        return []
+
+        residue = utils.norm(self.lin_sys.get_residual(self.x), ip_B=self.ip_B)
+
+        return SolverOutput(residue, auxiliaries=[])
 
     def run(self):
         return None
 
 
-class LinearSolverResult(object):
+class SolverOutput(object):
+    """
+    Abstract class for LinearSolver output class. This class is meant to be used by LinearSolver
+    object to store the different quantities involved in the LinearSolver run as much as the
+    historic of the residues.
+    """
 
-    def __init__(self, lin_solv, store=False):
+    def __init__(self, residue, auxiliaries=None, store=False):
+        """
 
-        if not isinstance(lin_solv, LinearSolver):
-            raise LinearSolverError('LinearSolverResult object must be defined from a '
-                                    'LinearSolver.')
+        :param residue:
+        :param auxiliaries:
+        :param store:
+        """
 
-        self.x_opt = lin_solv.x
+        # Sanitize the initialization of class attributes
+        auxiliaries = [] if auxiliaries is None else auxiliaries
+
+        if not isinstance(auxiliaries, list):
+            raise LinearSolverError('"auxiliaries" must be a list.')
+
+        for a_i in auxiliaries:
+            if not isinstance(a_i, numpy.ndarray):
+                    raise LinearSolverError('Auxiliary quantity must be a numpy.ndarray.')
+
+        self._auxiliaries = auxiliaries
+        self.n_aux = len(auxiliaries)
+
+        if not isinstance(residue, float) and residue <= 0:
+            raise LinearSolverError('Residue must be a non-negative float.')
+
+        self.residue = residue
+
+        if store and not isinstance(store, int) and not store >= 0:
+            raise LinearSolverError('store must be either "False" or positive integer.')
 
         if store:
-            self.auxiliaries = []
+            for i in range(len(self._auxiliaries)):
+                self._auxiliaries[i] = [self._auxiliaries[i]]
 
-            for a_i in lin_solv.auxiliaries:
-                if not isinstance(a_i, list):
-                    self.auxiliaries.append([a_i])
-                else:
-                    self.auxiliaries.append(a_i)
-        else:
-            self.auxiliaries = lin_solv.auxiliaries
-
-        self.store = store
-        self.residue = lin_solv.residue
+        self._store = 0 if not store else store
+        self.history = [self.residue]
         self.n_it = 0
 
-    def update(self, x, auxiliaries=[]):
+    def update(self, residue, auxiliaries):
+        self.residue = residue
 
-        self.x_opt = x
+        previous_aux = self.get_previous()
 
         if len(auxiliaries) != 0:
-            if len(auxiliaries) != len(self.auxiliaries):
+            if len(auxiliaries) != self.n_aux:
                 raise LinearSolverError('Updating a different number of auxiliaries than expected.')
 
             for i in range(len(auxiliaries)):
@@ -138,76 +205,130 @@ class LinearSolverResult(object):
                 if not isinstance(auxiliaries[i], numpy.ndarray):
                     raise LinearSolverError('Auxiliaries must be numpy.ndarray.')
 
-                if auxiliaries[i].shape != self.auxiliaries[i].shape:
+                if auxiliaries[i].shape != previous_aux[i].shape:
                     raise LinearSolverError('Auxiliary {} shape do not match previous entry.'
                                             .format(i))
 
-                if self.store:
-                    self.auxiliaries[i].append(auxiliaries[i])
+                if not self._store:
+                    self._auxiliaries[i] = auxiliaries[i]
                 else:
-                    self.auxiliaries[i] = auxiliaries[i]
+                    if len(self._auxiliaries) < self._store:
+                        self._auxiliaries[i].append(auxiliaries[i])
+                    else:
+                        del self._auxiliaries[i][0]
+                        self._auxiliaries[i].append(auxiliaries[i])
 
+        self.history.append(self.residue)
         self.n_it += 1
 
-    def draw(self):
+    def get_previous(self, index=-1):
+        if self._store:
+            previous_auxiliary = []
+            for aux_i in self._auxiliaries:
+                previous_auxiliary.append(aux_i[index])
+        else:
+            previous_auxiliary = self._auxiliaries
 
-        if not self.store:
-            raise LinearSolverError('No data stored hence impossibility to draw.')
+        return previous_auxiliary
+
+    def get_auxiliaries(self):
+        ret = []
+        if not self._store:
+            return self._auxiliaries
+
+        for i in range(self.n_aux):
+            aux_history = numpy.stack(self._auxiliaries[i])
+            ret.append(aux_history.T)
+
+        return ret
+
+    def convergence_history(self):
+        pyplot.semilogy(self.history)
+        pyplot.xlim(0, self.n_it)
+        pyplot.show()
+
+    def __repr__(self):
+        string = 'Run of {} iteration(s) | Final residual = {:1.2e}'\
+                 .format(self.n_it, self.residue)
+        return string
 
 
 class ConjugateGradient(LinearSolver):
 
-    def __init__(self, lin_sys, x_0=None, tol=1e-5):
+    def __init__(self, lin_sys, x_0=None, store=None, tol=1e-5):
 
         if not lin_sys.symmetric and not lin_sys.definite_positive:
-            raise LinearSolverError('Impossible to apply Conjugate Gradient to linear operator '
-                                    'not s.d.p.')
+            raise LinearSolverError('Conjugate Gradient only apply to s.d.p linear map.')
 
-        self.x = numpy.zeros_like(lin_sys.b) if x_0 is None else x_0
+        if lin_sys.block:
+            raise LinearSolverError('Conjugate Gradient only apply to simple left-hand side.')
 
-        self.maxiter = self.x.shape[0]
+        if lin_sys.A.shape[0] != lin_sys.A.shape[1]:
+            raise LinearSolverError('Conjugate Gradient only apply to square problems.')
 
-        super().__init__(lin_sys, self.x, [], lin_sys.A, tol, self.maxiter)
+        self.store = store
+
+        super().__init__(lin_sys, x_0, [], lin_sys.A, tol, lin_sys.shape[0])
 
     def _initialize(self):
-
-        r = self.lin_sys.get_residual(self.x)
+        r = - self.lin_sys.get_residual(self.x)
         p = r.copy()
 
-        return [p, r]
+        auxiliaries = [p, r]
+        residue = utils.norm(r, ip_B=self.ip_B)
+
+        return SolverOutput(residue, auxiliaries=auxiliaries, store=self.store)
 
     def run(self, verbose=False):
+        for k in range(self.maxiter):
 
-        for k in range(self.maxiter * 5):
-
-            p, r = self.result.auxiliaries
+            p, r = self.output.get_previous()
 
             q_k = self.lin_sys.A.dot(p)
 
             alpha = r.T.dot(r) / p.T.dot(q_k)
-            x_k = self.x + alpha * p
+            self.x += alpha * p
             r_k = r - alpha * q_k
 
-            self.residue = utils.norm(r_k, ip_B=self.ip_B)
+            residue = utils.norm(r_k, ip_B=self.ip_B)
 
-            if self.residue < self.tol:
+            if residue < self.tol:
+                self.output.update(residue, [])
                 break
 
             beta = r_k.T.dot(r_k) / r.T.dot(r)
             p_k = r_k + beta * p
 
-            self.result.update(x_k, [p_k, r_k])
+            self.output.update(residue, [p_k, r_k])
+
+        return self.output
 
 
 if __name__ == '__main__':
 
-    A = 5 * numpy.random.rand(5, 5)
-    b = numpy.random.rand(5, 1)
+    from scipy.sparse.linalg import cg
 
-    l = LinearSystem(A.dot(A.T), b, symmetric=True, definite_positive=True)
+    size = 5000
 
-    cg = ConjugateGradient(l)
+    A = numpy.random.rand(size, size)
+    A = A + A.T + numpy.diag([(i + 1) * size for i in range(size)])
+    b = numpy.ones((size, 1))
 
-    cg.run()
+    linSys = LinearSystem(A, b, symmetric=True, definite_positive=True)
 
-    print(cg.residue)
+    cg_own = ConjugateGradient(linSys, tol=1e-15)
+
+    from time import time
+
+    t = time()
+    x_opt, _ = cg(A, b, tol=1e-15, maxiter=size)
+    print(time() - t)
+
+    t = time()
+    output = cg_own.run()
+    print(time() - t)
+
+    print(output)
+    print(numpy.linalg.norm(A.dot(cg_own.x) - b))
+    print(numpy.linalg.norm(A.dot(x_opt) - b))
+
