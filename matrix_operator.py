@@ -70,31 +70,31 @@ class UpperTriangularMap(LinearMap):
         return ret
 
     def __repr__(self):
-        return self._A.__repr__()
+        return self._T.__repr__()
 
 
 class SelfAdjointMap(LinearMap):
 
-    def __init__(self, A):
+    def __init__(self, S):
 
-        if not type(A) == numpy.ndarray:
+        if not type(S) == numpy.ndarray:
             raise MatrixOperatorError('SelfAdjointMap objects must be defined from a numpy.ndarray')
 
-        if A.shape[0] != A.shape[1]:
+        if S.shape[0] != S.shape[1]:
             raise MatrixOperatorError('Self-adjoint operator must be of square shape.')
 
-        T = numpy.triu(A)
+        T = numpy.triu(S)
         T[numpy.diag_indices_from(T)] /= 2
 
         super().__init__(T.shape, T.dtype, self._dot, self._dot_adj)
 
-        self._half = UpperTriangularMap(T)
+        self._triu = UpperTriangularMap(T)
 
     def _dot(self, X):
-        return self._half.dot(X) + self._half.dot_adj(X)
+        return self._triu.dot(X) + self._triu.dot_adj(X)
 
     def _dot_adj(self, X):
-        return self._half.dot(X) + self._half.dot_adj(X)
+        return self._triu.dot(X) + self._triu.dot_adj(X)
 
     def __repr__(self):
-        return self._A.__repr__()
+        return self._triu.__repr__()
