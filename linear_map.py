@@ -307,11 +307,10 @@ class Projector(LinearMap):
                 self.V, self.R_v = X, None
                 self.W, self.R_w = Y, None
 
-            print(self.W.T.dot(self.V))
             self.Q, self.R = scipy.linalg.qr(self.W.T.dot(self.V))
 
     def _dot(self, X):
-        # If orthogonalized
+        # If orthonormalized
         if self.Q is None:
             return self.V.dot(self.W.T.dot(X))
         else:
@@ -319,7 +318,7 @@ class Projector(LinearMap):
             return self.V.dot(scipy.linalg.solve_triangular(self.R, c))
 
     def _dot_adj(self, X):
-        # If orthogonalized
+        # If orthonormalized
         if self.Q is None:
             return self.W.dot(self.V.T.dot(X))
         else:
