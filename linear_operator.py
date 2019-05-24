@@ -10,12 +10,20 @@ Description:
 """
 
 import numpy
-import scipy
+import scipy.sparse
 
 from utils import qr, convert_to_col
 
+from scipy.sparse.linalg import LinearOperator as scipyLinearOperator
 
-class LinearMapError(Exception):
+
+class LinearOperatorError(Exception):
+    """
+    Exception raised when LinearOperator object encounters specific errors.
+    """
+
+
+class MatrixOperatorError(Exception):
     """
     Exception raised when LinearMap object encounters specific errors.
     """
@@ -27,242 +35,245 @@ class ProjectorError(Exception):
     """
 
 
-class LinearMap(object):
+class LinearOperator(scipyLinearOperator):
 
-    def __init__(self, shape, dtype=numpy.float64, dot=None, dot_adj=None):
+    def __init__(self, shape, dtype):
 
         if not isinstance(shape, tuple) or len(shape) != 2:
-            raise LinearMapError('Shape must be a tuple (n, p).')
+            raise LinearOperatorError('Shape must be a tuple of the form(n, p).')
 
         if not isinstance(shape[0], int) or not isinstance(shape[1], int):
-            raise LinearMapError('Shape must me a tuple of integers.')
+            raise LinearOperatorError('Shape must me a tuple of integers.')
 
         self.shape = shape
+        self.size = None
 
         try:
             self.dtype = numpy.dtype(dtype)
         except TypeError:
-            raise LinearMapError('"dtype" provided not understood')
+            raise LinearOperatorError('dtype provided not understood')
 
-        self._dot = dot
-        self._dot_adj = dot_adj
+    # def _matmat(self, X):
+    #     raise LinearOperatorError('Matrix-matrix product not defined for LinearOperator objects.')
 
-    def dot(self, X):
-        X = numpy.asanyarray(X)
-        n, p = self.shape
+    def _rmatmat(self, X):
+        raise LinearOperatorError('rMatrix-matrix product not defined for LinearOperator objects.')
 
-        if X.shape[0] != p:
-            raise LinearMapError('Dimensions do not match.')
+    def _matvec(self, x):
+        return None
 
-        if X.shape[1] == 0:
-            raise LinearMapError('Array must have at least 2 dimensions.')
-
-        if self._dot is None:
-            raise LinearMapError('The "_dot" class method is not implemented. ')
-
-        return self._dot(X)
-
-    def dot_adj(self, X):
-        X = numpy.asanyarray(X)
-        n, p = self.shape
-
-        if X.shape[0] != n:
-            raise LinearMapError('Dimensions do not match.')
-
-        if X.shape[1] == 0:
-            raise LinearMapError('Array must have at least 2 dimensions.')
-
-        if self._dot is None:
-            raise LinearMapError('The "_dot_adj" class method is not implemented. ')
-
-        return self._dot_adj(X)
-
-    def canonical_repr(self):
-
-        n, p = self.shape
-
-        A = numpy.zeros(self.shape)
-
-        e = numpy.zeros((p, 1))
-
-        for i in range(p):
-            if i != 0:
-                e[i - 1, 0] = 0
-            e[i, 0] = 1
-            A[:, i] = self.dot(e)[:, 0]
-
-        return A
+    def _rmatvec(self, x):
+        return None
 
     def adjoint(self):
-        return _AdjointLinearMap(self)
+        return _AdjointLinearOperator(self)
 
     def __rmul__(self, scalar):
-        return _ScaleLinearMap(self, scalar)
+        return _ScaleLinearOperator(self, scalar)
 
     def __add__(self, B):
-        return _SumLinearMap(self, B)
+        return _SumLinearOperator(self, B)
 
     def __mul__(self, B):
-        return _ComposeLinearMap(self, B)
+        return _ComposedLinearOperator(self, B)
 
     def __neg__(self):
-        return _ScaleLinearMap(self, -1)
+        return _ScaleLinearOperator(self, -1)
 
     def __sub__(self, B):
         return self + (-B)
 
 
-class _ScaleLinearMap(LinearMap):
+class _ScaleLinearOperator(LinearOperator):
 
     def __init__(self, A, scalar):
 
-        if not isinstance(A, LinearMap):
-            raise LinearMapError('External linear map product must concern LinearMap.')
+        if not isinstance(A, LinearOperator):
+            raise LinearOperatorError('External product should involve a LinearOperator.')
 
         if not numpy.isscalar(scalar):
-            raise LinearMapError('External linear map product must be with a scalar.')
+            raise LinearOperatorError('External product should involve a scalar.')
 
         self.operands = (scalar, A)
 
         dtype = numpy.find_common_type([A.dtype], [type(scalar)])
 
-        super().__init__(A.shape, dtype, self._dot, self._dot_adj)
+        super().__init__(A.shape, dtype)
 
-    def _dot(self, X):
+    def _matvec(self, X):
         return self.operands[0] * self.operands[1].dot(X)
 
-    def _dot_adj(self, X):
-        return numpy.conj(self.operands[0]) * self.operands[1].dot_adj(X)
+    def _rmatvec(self, X):
+        return numpy.conj(self.operands[0]) * self.operands[1].H.dot(X)
 
 
-class _SumLinearMap(LinearMap):
+class _SumLinearOperator(LinearOperator):
 
     def __init__(self, A, B):
 
-        if not isinstance(A, LinearMap) or not isinstance(B, LinearMap):
-            raise LinearMapError('Both operands must be LinearMap.')
+        if not isinstance(A, LinearOperator) or not isinstance(B, LinearOperator):
+            raise LinearOperatorError('Both operands in summation must be LinearOperator.')
 
         if A.shape != B.shape:
-            raise LinearMapError('Both operands must have the same shape.')
+            raise LinearOperatorError('Both operands in summation must have the same shape.')
 
         self.operands = (A, B)
 
         dtype = numpy.find_common_type([A.dtype, B.dtype], [])
 
-        super().__init__(A.shape, dtype, self._dot, self._dot_adj)
+        super().__init__(A.shape, dtype)
 
-    def _dot(self, X):
+    def _matvec(self, X):
         return self.operands[0].dot(X) + self.operands[1].dot(X)
 
-    def _dot_adj(self, X):
-        return self.operands[0].dot_adj(X) + self.operands[1].dot_adj(X)
+    def _rmatvec(self, X):
+        return self.operands[0].H.dot(X) + self.operands[1].H.dot(X)
 
 
-class _ComposeLinearMap(LinearMap):
+class _ComposedLinearOperator(LinearOperator):
 
     def __init__(self, A, B):
 
-        if not isinstance(A, LinearMap) or not isinstance(B, LinearMap):
-            raise LinearMapError('Both operands must be LinearMap.')
+        if not isinstance(A, LinearOperator) or not isinstance(B, LinearOperator):
+            raise LinearOperatorError('Both operands must be LinearOperator.')
 
         if A.shape[1] != B.shape[0]:
-            raise LinearMapError('Shape of operands do not match for composition.')
+            raise LinearOperatorError('Shape of operands do not match for composition.')
 
         self.operands = (A, B)
 
         shape = (A.shape[0], B.shape[1])
         dtype = numpy.find_common_type([A.dtype, B.dtype], [])
 
-        super().__init__(shape, dtype, self._dot, self._dot_adj)
+        super().__init__(shape, dtype)
 
-    def _dot(self, X):
+    def _matvec(self, X):
         return self.operands[0].dot(self.operands[1].dot(X))
 
-    def _dot_adj(self, X):
-        return self.operands[1].dot_adj(self.operands[0].dot_adj(X))
+    def _rmatvec(self, X):
+        return self.operands[1].H.dot(self.operands[0].H.dot(X))
 
 
-class _AdjointLinearMap(LinearMap):
+class _AdjointLinearOperator(LinearOperator):
 
     def __init__(self, A):
 
-        if not isinstance(A, LinearMap):
-            raise LinearMapError('Adjoint is only defined for LinearMap.')
+        if not isinstance(A, LinearOperator):
+            raise LinearOperatorError('Adjoint is only defined for LinearOperator.')
 
         n, p = A.shape
 
-        super().__init__((p, n), A.dtype, A._dot_adj, A._dot)
+        super().__init__((p, n), A.dtype)
+
+        self._matvec = A._rmatvec
+        self._rmatvec = A._matvec
 
 
-class IdentityMap(LinearMap):
+class IdentityOperator(LinearOperator):
 
-    def __init__(self, shape):
+    def __init__(self, size):
 
-        super().__init__(shape, dot=self._dot, dot_adj=self._dot_adj)
+        if not isinstance(size, int) or size < 1:
+            raise LinearOperatorError('IdentityOperator should have a positive integer size.')
 
-    @staticmethod
-    def _dot(X):
-        return X
+        super().__init__((size, size), dtype=numpy.float64)
 
-    @staticmethod
-    def _dot_adj(X):
-        return X
+    def _matvec(self, x):
+        return x
 
-    def canonical_repr(self):
-        return numpy.eye(self.shape[0])
+    def _rmatvec(self, x):
+        return x
 
 
-class ZeroMap(LinearMap):
+class MatrixOperator(LinearOperator):
 
-    def __init__(self, shape):
-        super().__init__(shape, dot=self._dot, dot_adj=self._dot_adj)
+    _sparse_formats = ['csr', 'csc', 'dia', 'bsr', 'coo', 'dok', 'lil']
 
-    @staticmethod
-    def _dot(X):
-        return numpy.zeros(X.shape)
+    def __init__(self, A, sparse_format='dense'):
 
-    @staticmethod
-    def _dot_adj(X):
-        return numpy.zeros(X.shape)
+        if isinstance(A, numpy.ndarray) or isinstance(A, numpy.matrix):
+            if sparse_format is 'dense':
+                self.A = scipy.sparse.linalg.aslinearoperator(A)
+            elif sparse_format in self._sparse_formats:
+                self.A = scipy.sparse.csc_matrix(A).asformat(sparse_format)
+            else:
+                raise MatrixOperatorError('Sparse format {} not understood.'.format(sparse_format))
 
-    def canonical_repr(self):
-        return numpy.zeros(self.shape)
+        elif isinstance(A, scipy.sparse.spmatrix):
+            self.A = A
+
+        else:
+            raise MatrixOperatorError('MatrixOperator of dense format should be defined from either'
+                                      'a numpy.ndarray, numpy.matrix, or scipy.sparse.spmatrix')
+
+        self.sparse_format = sparse_format
+        super().__init__(A.shape, A.dtype)
+
+        self.size = self.A.size
+
+    def _matvec(self, X):
+
+        X = numpy.asanyarray(X)
+        n, p = self.shape
+
+        if X.shape[0] != p:
+            raise MatrixOperatorError('Dimensions do not match.')
+
+        if X.shape[1] != 1:
+            raise MatrixOperatorError('Array must have shape of the form (n, 1).')
+
+        return self.A.dot(X)
+
+    def _rmatvec(self, X):
+
+        X = numpy.asanyarray(X)
+        n, p = self.shape
+
+        if X.shape[0] != p:
+            raise MatrixOperatorError('Dimensions do not match.')
+
+        if X.shape[1] != 1:
+            raise MatrixOperatorError('Array must have shape of the form (n, 1).')
+
+        return self.A.H.dot(X)
 
 
-class DiagonalMap(LinearMap):
+class DiagonalMatrix(MatrixOperator):
 
-    def __init__(self, diag):
+    def __init__(self, diagonals, sparse_format='dia'):
 
-        if isinstance(diag, list):
-            diag = numpy.asarray(diag)
+        if isinstance(diagonals, list):
+            diagonals = numpy.asarray(diagonals)
 
-        if not isinstance(diag, numpy.ndarray) or not diag.ndim == 1:
-            raise LinearMapError('The diagonal terms must be provided as a numpy.ndarray of 1 '
-                                 'dimension.')
-
-        super().__init__((diag.size, diag.size), diag.dtype, self._dot, self._dot_adj)
-
-        self._diag = diag
-
-    def _dot(self, X):
-        ret = numpy.zeros_like(X)
-        for i in range(self._diag.size):
-            ret[i, :] = self._diag[i] * X[i, :]
-
-        return ret
-
-    def _dot_adj(self, X):
-        ret = numpy.zeros_like(X)
-        for i in range(self._diag.size):
-            ret[i, :] = self._diag[i] * X[i, :]
-
-        return ret
-
-    def canonical_repr(self):
-        return numpy.diag(self.diag)
+        super().__init__(numpy.diag(diagonals), sparse_format)
 
 
-class Projector(LinearMap):
+class TriangularMatrix(MatrixOperator):
+
+    def __init__(self, A, lower=False, sparse_format='csc'):
+
+        if hasattr(A, 'shape') and A.shape[0] != A.shape[1]:
+            raise MatrixOperatorError('TriangularMatrix matrix must be of square shape.')
+
+        if lower:
+            super().__init__(numpy.tril(A), sparse_format)
+        else:
+            super().__init__(numpy.triu(A), sparse_format)
+
+
+class SelfAdjointMatrix(MatrixOperator):
+
+    def __init__(self, A, def_pos=False, sparse_format='csc'):
+
+        if hasattr(A, 'shape') and A.shape[0] != A.shape[1]:
+            raise MatrixOperatorError('SelfAdjointMatrix matrix must be of square shape.')
+
+        super().__init__(A, sparse_format)
+
+        self.def_pos = def_pos
+
+
+class Projector(LinearOperator):
     """
     Abstract class for projectors. In the initialization of the Projector, X denotes the range
     and Y denotes the orthogonal complement of the kernel. The matrix formulation is:
@@ -285,7 +296,7 @@ class Projector(LinearMap):
         shape = (X.shape[0], X.shape[0])
         dtype = numpy.find_common_type([X.dtype, Y.dtype], [])
 
-        super().__init__(shape, dtype, self._dot, self._dot_adj)
+        super().__init__(shape, dtype)
 
         # If orthogonal projector
         if Y is X:
@@ -309,7 +320,7 @@ class Projector(LinearMap):
 
             self.Q, self.R = scipy.linalg.qr(self.W.T.dot(self.V))
 
-    def _dot(self, X):
+    def _matvec(self, X):
         # If orthonormalized
         if self.Q is None:
             return self.V.dot(self.W.T.dot(X))
@@ -317,52 +328,13 @@ class Projector(LinearMap):
             c = self.Q.T.dot(self.W.T.dot(X))
             return self.V.dot(scipy.linalg.solve_triangular(self.R, c))
 
-    def _dot_adj(self, X):
+    def _rmatvec(self, X):
         # If orthonormalized
         if self.Q is None:
             return self.W.dot(self.V.T.dot(X))
         else:
             c = self.V.T.dot(X)
-            return self.W.dot(self.Q.dot(scipy.linalg.solve(self.R.T, c, lower=True)))
+            return self.W.dot(self.Q.dot(scipy.linalg.solve(self.R.T, c)))
 
     def get_complement(self):
-        return IdentityMap(self.shape) - self
-
-
-if __name__ == "__main__":
-
-    import numpy
-    from numpy.linalg import norm
-
-    size = 20
-    n = 4
-    orthogonalize = True
-
-    V = numpy.random.rand(size, n)
-    W = numpy.random.rand(size, n)
-    S = numpy.random.rand(size, n)
-
-    P_ortho = Projector(V, None, orthogonalize)
-    P_obliq = Projector(V, W, orthogonalize)
-    P_adjnt = Projector(W, V, orthogonalize)
-
-    print('Range validation :')
-    print(norm(P_ortho.dot(V) - V))
-    print(norm(P_obliq.dot(V) - V))
-    print()
-
-    V_orth = S - P_ortho.dot(S)
-    W_orth = S - P_obliq.dot(S)
-
-    print('Kernel validation :')
-    print(norm(P_ortho.dot(V_orth)))
-    print(norm(P_obliq.dot(W_orth)))
-    print()
-
-    print('Adjonction validation:')
-    print(norm(P_adjnt.dot(S) - P_obliq.dot_adj(S)))
-    print()
-
-    print('Complement Projector valdiation')
-    P_comp = P_obliq.get_complement()
-    print(norm(S - P_comp.dot(S) - P_obliq.dot(S)))
+        return IdentityOperator(self.shape[0]) - self
