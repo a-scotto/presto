@@ -236,8 +236,10 @@ class _SolverMonitor(object):
             return self._auxiliaries
 
         for i in range(self.n_aux):
+            print(len(self._auxiliaries[i]))
             aux_history = numpy.stack(self._auxiliaries[i])
-            ret.append(aux_history.T)
+            print(aux_history.shape)
+            ret.append(aux_history)
 
         if self.n_aux == 1:
             return ret[0]
@@ -260,19 +262,6 @@ class _SolverMonitor(object):
         string = '{:8}: run of {:4} iteration(s) | Relative 2-norm residual = {:1.4e}'\
                  .format(solver_name, self.n_it, self._history[0][-1])
         return string
-
-
-class _SolverResult(object):
-
-    def __init__(self, x_opt, solver_monitor):
-
-        if not isinstance(x_opt, numpy.ndarray) and not isinstance(x_opt, numpy.matrix):
-            raise LinearSolverError('x_opt must be numpy.ndarray or numpy.matrix.')
-
-        if not isinstance(solver_monitor, _SolverMonitor):
-            raise LinearSolverError('_SolverResult must be defined from _SolverMonitor')
-
-        self.x_opt = x_opt
 
 
 class ConjugateGradient(_LinearSolver):
@@ -504,7 +493,7 @@ if __name__ == '__main__':
     from problems.loader import load_problem, print_problem
     # from preconditioner import LimitedMemoryPreconditioner
 
-    file_name = 'Kuu'
+    file_name = 'benzene'
 
     problem = load_problem(file_name)
     print_problem(problem)
@@ -519,7 +508,7 @@ if __name__ == '__main__':
     cg_output = ConjugateGradient(linSys, tol=1e-6, store=0).run()
     res1 = numpy.linalg.norm(A.dot(cg_output['x']) - b)
 
-    bcg_output = BlockConjugateGradient(blockLinSys, tol=1e-6, store=0).run()
+    bcg_output = BlockConjugateGradient(blockLinSys, tol=1e-6, store=10).run()
     res2 = numpy.linalg.norm(A.dot(bcg_output['x']) - B)
 
     print(cg_output['report'])
@@ -532,7 +521,8 @@ if __name__ == '__main__':
     pyplot.ylabel('log relative residual')
     pyplot.legend(['CG', 'BCG'])
 
-    # S = cg_output['p']
+    S = bcg_output['P']
+    print(S.shape)
     # H = LimitedMemoryPreconditioner(SelfAdjointMatrix(A, def_pos=True, sparse_format='csc'), S)
     #
     # t = time()
