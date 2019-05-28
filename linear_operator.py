@@ -29,62 +29,45 @@ class MatrixOperatorError(Exception):
     """
 
 
-class ProjectorError(Exception):
-    """
-    Exception raised when Projector object encounters specific errors.
-    """
-
-
 class LinearOperator(scipyLinearOperator):
 
-    def __init__(self, shape, dtype):
+    def __init__(self, shape, dtype, apply_cost=None):
 
         if not isinstance(shape, tuple) or len(shape) != 2:
-            raise LinearOperatorError('Shape must be a tuple of the form(n, p).')
+            raise LinearOperatorError('Shape must be a tuple of the form (n, p).')
 
         if not isinstance(shape[0], int) or not isinstance(shape[1], int):
             raise LinearOperatorError('Shape must me a tuple of integers.')
 
         self.shape = shape
-        self.size = None
 
         try:
             self.dtype = numpy.dtype(dtype)
         except TypeError:
             raise LinearOperatorError('dtype provided not understood')
-
-    # def _matmat(self, X):
-    #     raise LinearOperatorError('Matrix-matrix product not defined for LinearOperator objects.')
-
-    def _rmatmat(self, X):
-        raise LinearOperatorError('rMatrix-matrix product not defined for LinearOperator objects.')
-
-    def _matvec(self, x):
-        return None
-
-    def _rmatvec(self, x):
-        return None
+        
+        self.apply_cost = apply_cost
 
     def adjoint(self):
         return _AdjointLinearOperator(self)
 
     def __rmul__(self, scalar):
-        return _ScaleLinearOperator(self, scalar)
+        return _ScaledLinearOperator(self, scalar)
 
     def __add__(self, B):
-        return _SumLinearOperator(self, B)
+        return _SummedLinearOperator(self, B)
 
     def __mul__(self, B):
         return _ComposedLinearOperator(self, B)
 
     def __neg__(self):
-        return _ScaleLinearOperator(self, -1)
+        return _ScaledLinearOperator(self, -1)
 
     def __sub__(self, B):
         return self + (-B)
 
 
-class _ScaleLinearOperator(LinearOperator):
+class _ScaledLinearOperator(LinearOperator):
 
     def __init__(self, A, scalar):
 
@@ -98,7 +81,7 @@ class _ScaleLinearOperator(LinearOperator):
 
         dtype = numpy.find_common_type([A.dtype], [type(scalar)])
 
-        super().__init__(A.shape, dtype)
+        super().__init__(A.shape, dtype, A.apply_cost)
 
     def _matvec(self, X):
         return self.operands[0] * self.operands[1].dot(X)
@@ -107,7 +90,7 @@ class _ScaleLinearOperator(LinearOperator):
         return numpy.conj(self.operands[0]) * self.operands[1].H.dot(X)
 
 
-class _SumLinearOperator(LinearOperator):
+class _SummedLinearOperator(LinearOperator):
 
     def __init__(self, A, B):
 
@@ -120,8 +103,9 @@ class _SumLinearOperator(LinearOperator):
         self.operands = (A, B)
 
         dtype = numpy.find_common_type([A.dtype, B.dtype], [])
+        apply_cost = A.apply_cost + B.apply_cost
 
-        super().__init__(A.shape, dtype)
+        super().__init__(A.shape, dtype, apply_cost)
 
     def _matvec(self, X):
         return self.operands[0].dot(X) + self.operands[1].dot(X)
@@ -144,8 +128,9 @@ class _ComposedLinearOperator(LinearOperator):
 
         shape = (A.shape[0], B.shape[1])
         dtype = numpy.find_common_type([A.dtype, B.dtype], [])
+        apply_cost = A.apply_cost + B.apply_cost
 
-        super().__init__(shape, dtype)
+        super().__init__(shape, dtype, apply_cost)
 
     def _matvec(self, X):
         return self.operands[0].dot(self.operands[1].dot(X))
@@ -163,7 +148,7 @@ class _AdjointLinearOperator(LinearOperator):
 
         n, p = A.shape
 
-        super().__init__((p, n), A.dtype)
+        super().__init__((p, n), A.dtype, A.apply_cost)
 
         self._matvec = A._rmatvec
         self._rmatvec = A._matvec
@@ -176,7 +161,7 @@ class IdentityOperator(LinearOperator):
         if not isinstance(size, int) or size < 1:
             raise LinearOperatorError('IdentityOperator should have a positive integer size.')
 
-        super().__init__((size, size), dtype=numpy.float64)
+        super().__init__((size, size), numpy.float64, 0)
 
     def _matvec(self, x):
         return x
@@ -189,27 +174,21 @@ class MatrixOperator(LinearOperator):
 
     _sparse_formats = ['csr', 'csc', 'dia', 'bsr', 'coo', 'dok', 'lil']
 
-    def __init__(self, A, sparse_format='dense'):
+    def __init__(self, A):
 
-        if isinstance(A, numpy.ndarray) or isinstance(A, numpy.matrix):
-            if sparse_format is 'dense':
-                self.A = scipy.sparse.linalg.aslinearoperator(A)
-            elif sparse_format in self._sparse_formats:
-                self.A = scipy.sparse.csc_matrix(A).asformat(sparse_format)
-            else:
-                raise MatrixOperatorError('Sparse format {} not understood.'.format(sparse_format))
+        if isinstance(A, (numpy.ndarray, numpy.matrix)):
+            self.sparse = False
 
         elif isinstance(A, scipy.sparse.spmatrix):
-            self.A = A
+            self.sparse = True
 
         else:
-            raise MatrixOperatorError('MatrixOperator of dense format should be defined from either'
-                                      'a numpy.ndarray, numpy.matrix, or scipy.sparse.spmatrix')
+            raise MatrixOperatorError('MatrixOperator should be defined from either numpy.ndarray, '
+                                      'numpy.matrix, or scipy.sparse.spmatrix')
 
-        self.sparse_format = sparse_format
-        super().__init__(A.shape, A.dtype)
+        self.A = A
 
-        self.size = self.A.size
+        super().__init__(A.shape, A.dtype, A.size)
 
     def _matvec(self, X):
 
@@ -237,104 +216,48 @@ class MatrixOperator(LinearOperator):
 
         return self.A.H.dot(X)
 
+    def get_format(self):
+
+        if self.sparse:
+            return self.A.getformat()
+        else:
+            return 'dense'
+
 
 class DiagonalMatrix(MatrixOperator):
 
-    def __init__(self, diagonals, sparse_format='dia'):
+    def __init__(self, diagonals):
 
         if isinstance(diagonals, list):
             diagonals = numpy.asarray(diagonals)
 
-        super().__init__(numpy.diag(diagonals), sparse_format)
+        A = scipy.sparse.diags(diagonals)
+
+        super().__init__(A)
 
 
 class TriangularMatrix(MatrixOperator):
 
-    def __init__(self, A, lower=False, sparse_format='csc'):
+    def __init__(self, A, lower=False):
 
-        if hasattr(A, 'shape') and A.shape[0] != A.shape[1]:
+        if not hasattr(A, 'shape') or len(A.shape) != 2 or A.shape[0] != A.shape[1]:
             raise MatrixOperatorError('TriangularMatrix matrix must be of square shape.')
 
         if lower:
-            super().__init__(numpy.tril(A), sparse_format)
+            super().__init__(A)
         else:
-            super().__init__(numpy.triu(A), sparse_format)
+            super().__init__(A)
+
+        self.lower = lower
 
 
 class SelfAdjointMatrix(MatrixOperator):
 
-    def __init__(self, A, def_pos=False, sparse_format='csc'):
+    def __init__(self, A, def_pos=False):
 
-        if hasattr(A, 'shape') and A.shape[0] != A.shape[1]:
+        if not hasattr(A, 'shape') or len(A.shape) != 2 or A.shape[0] != A.shape[1]:
             raise MatrixOperatorError('SelfAdjointMatrix matrix must be of square shape.')
 
-        super().__init__(A, sparse_format)
+        super().__init__(A)
 
         self.def_pos = def_pos
-
-
-class Projector(LinearOperator):
-    """
-    Abstract class for projectors. In the initialization of the Projector, X denotes the range
-    and Y denotes the orthogonal complement of the kernel. The matrix formulation is:
-
-    P = X * ( Y^T * X)^{-1} * Y^T
-
-    """
-
-    def __init__(self, X, Y=None, orthogonalize=True):
-
-        if not isinstance(X, numpy.ndarray) or (Y is not None and not isinstance(Y, numpy.ndarray)):
-            raise ProjectorError('Projector must be a numpy.ndarray')
-
-        X = convert_to_col(X)
-        Y = X if Y is None else convert_to_col(Y)
-
-        if X.shape != Y.shape:
-            raise ProjectorError('Projector range and kernel orthogonal must have same dimension.')
-
-        shape = (X.shape[0], X.shape[0])
-        dtype = numpy.find_common_type([X.dtype, Y.dtype], [])
-
-        super().__init__(shape, dtype)
-
-        # If orthogonal projector
-        if Y is X:
-            if orthogonalize:
-                self.V, self.R_v = qr(X)
-                self.Q, self.R = None, None
-            else:
-                self.V, self.R_v = X, None
-                self.Q, self.R = scipy.linalg.qr(self.V.T.dot(self.V))
-
-            self.W, self.R_w = self.V, self.R_v
-
-        # If oblique projector
-        else:
-            if orthogonalize:
-                self.V, self.R_v = qr(X)
-                self.W, self.R_w = qr(Y)
-            else:
-                self.V, self.R_v = X, None
-                self.W, self.R_w = Y, None
-
-            self.Q, self.R = scipy.linalg.qr(self.W.T.dot(self.V))
-
-    def _matvec(self, X):
-        # If orthonormalized
-        if self.Q is None:
-            return self.V.dot(self.W.T.dot(X))
-        else:
-            c = self.Q.T.dot(self.W.T.dot(X))
-            return self.V.dot(scipy.linalg.solve_triangular(self.R, c))
-
-    def _rmatvec(self, X):
-        # If orthonormalized
-        if self.Q is None:
-            return self.W.dot(self.V.T.dot(X))
-        else:
-            c = self.V.T.dot(X)
-            return self.W.dot(self.Q.dot(scipy.linalg.solve(self.R.T, c)))
-
-    def get_complement(self):
-        return IdentityOperator(self.shape[0]) - self
