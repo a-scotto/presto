@@ -110,7 +110,7 @@ class _LinearSolver(object):
         self.x = x_0
 
         if M is None:
-            M = IdentityPreconditioner(self.x.size)
+            M = IdentityPreconditioner(lin_sys.lin_op)
 
         elif isinstance(M, list):
             for M_i in M:
@@ -236,9 +236,7 @@ class _SolverMonitor(object):
             return self._auxiliaries
 
         for i in range(self.n_aux):
-            print(len(self._auxiliaries[i]))
-            aux_history = numpy.stack(self._auxiliaries[i])
-            print(aux_history.shape)
+            aux_history = self._auxiliaries[i]
             ret.append(aux_history)
 
         if self.n_aux == 1:
@@ -259,7 +257,7 @@ class _SolverMonitor(object):
             return ret.__iter__()
 
     def report(self, solver_name):
-        string = '{:8}: run of {:4} iteration(s) | Relative 2-norm residual = {:1.4e}'\
+        string = '{:25}: run of {:4} iteration(s) | Relative 2-norm residual = {:1.4e}'\
                  .format(solver_name, self.n_it, self._history[0][-1])
         return string
 
@@ -289,7 +287,7 @@ class ConjugateGradient(_LinearSolver):
             raise LinearSolverError('Conjugate Gradient can handle only one preconditioner.')
 
     def _initialize(self):
-        op_size = self.lin_sys.lin_op.size
+        operator_cost = self.lin_sys.lin_op.apply_cost
         n, _ = self.lin_sys.lhs.shape
 
         r = - self.lin_sys.get_residual(self.x)
@@ -298,7 +296,7 @@ class ConjugateGradient(_LinearSolver):
         auxiliaries = [z, p, r]
 
         residue = utils.norm(r)
-        cost = 2*op_size + n
+        cost = 2*operator_cost + n
         history = [residue, cost]
 
         self.total_cost += cost
@@ -310,31 +308,31 @@ class ConjugateGradient(_LinearSolver):
         residues, cost = self.monitor.get_history()
         z, p, r = self.monitor.get_auxiliaries()
 
-        output = {'report': self.monitor.report('CG'),
+        output = {'report': self.monitor.report('Conjugate Gradient'),
                   'x': self.x * self.lin_sys.scale,
                   'n_it': self.monitor.n_it,
                   'residues': residues,
                   'cost': cost,
-                  'Z': z,
-                  'P': p,
-                  'R': r}
+                  'z': z,
+                  'p': p,
+                  'r': r}
 
         return output
 
     def _iteration_cost(self):
 
-        op_size = self.lin_sys.lin_op.size
+        operator_cost = self.lin_sys.lin_op.apply_cost
         n, _ = self.lin_sys.lhs.shape
         total_cost = 0
 
-        total_cost += 2 * op_size   # q_k
-        total_cost += 4*n + 1       # alpha
-        total_cost += 2*n           # self.x
-        total_cost += 2*n           # r_k
-        total_cost += 2*n           # residue
-        total_cost += 0             # z_k
-        total_cost += 4*n + 1       # beta
-        total_cost += 2*n           # p_k
+        total_cost += 2 * operator_cost     # q_k
+        total_cost += 4*n + 1               # alpha
+        total_cost += 2*n                   # self.x
+        total_cost += 2*n                   # r_k
+        total_cost += 2*n                   # residue
+        total_cost += 0                     # z_k
+        total_cost += 4*n + 1               # beta
+        total_cost += 2*n                   # p_k
 
         return total_cost
 
@@ -391,7 +389,7 @@ class BlockConjugateGradient(_LinearSolver):
             raise LinearSolverError('Block Conjugate Gradient can handle only one preconditioner.')
 
     def _initialize(self):
-        op_size = self.lin_sys.lin_op.size
+        operator_cost = self.lin_sys.lin_op.apply_cost
         n, k = self.lin_sys.lhs.shape
 
         R = - self.lin_sys.get_residual(self.x)
@@ -404,7 +402,7 @@ class BlockConjugateGradient(_LinearSolver):
         auxiliaries = [Z, P, R]
 
         res = utils.norm(R)
-        cost = 2*op_size*k + n*k + 2 * self.lin_sys.lhs.size
+        cost = 2*operator_cost*k + n*k + 2 * self.lin_sys.lhs.size
         history = [res, cost, rank]
 
         self.total_cost += cost
@@ -416,7 +414,7 @@ class BlockConjugateGradient(_LinearSolver):
         residues, cost, rank = self.monitor.get_history()
         Z, P, R = self.monitor.get_auxiliaries()
 
-        output = {'report': self.monitor.report('BlockCG'),
+        output = {'report': self.monitor.report('Block Conjugate Gradient'),
                   'x': self.x * self.lin_sys.scale,
                   'n_it': self.monitor.n_it,
                   'residues': residues,
@@ -430,21 +428,21 @@ class BlockConjugateGradient(_LinearSolver):
 
     def _iteration_cost(self, r):
 
-        op_size = self.lin_sys.lin_op.size
+        operator_cost = self.lin_sys.lin_op.apply_cost
         n, k = self.lin_sys.lhs.shape
         total_cost = 0
 
-        total_cost += 2 * op_size * r       # Q_k
-        total_cost += 2 * n * r**2          # delta
-        total_cost += 4*k*r**2 + 22*k**3    # SVD of delta
-        total_cost += r                     # s_inv
-        total_cost += 2*(r*n*k + 3*r*r*k)   # alpha
-        total_cost += n*k + 2*r*n*k         # self.x
-        total_cost += n*k + 2*r*n*k         # R_k
-        total_cost += 2*n*r**2              # residue
-        total_cost += 0                     # Z_k
-        total_cost += 2*(r*n*r + 3*r*r*k)   # beta
-        total_cost += 2*n*r*r + n*r         # P_k
+        total_cost += 2 * operator_cost * r     # Q_k
+        total_cost += 2 * n * r**2              # delta
+        total_cost += 4*k*r**2 + 22*k**3        # SVD of delta
+        total_cost += r                         # s_inv
+        total_cost += 2*(r*n*k + 3*r*r*k)       # alpha
+        total_cost += n*k + 2*r*n*k             # self.x
+        total_cost += n*k + 2*r*n*k             # R_k
+        total_cost += 2*n*r**2                  # residue
+        total_cost += 0                         # Z_k
+        total_cost += 2*(r*n*r + 3*r*r*k)       # beta
+        total_cost += 2*n*r*r + n*r             # P_k
 
         return total_cost
 
@@ -491,61 +489,50 @@ if __name__ == '__main__':
 
     from matplotlib import pyplot
     from problems.loader import load_problem, print_problem
-    # from preconditioner import LimitedMemoryPreconditioner
+    from preconditioner import LimitedMemoryPreconditioner
 
-    file_name = 'benzene'
+    file_name = 'Kuu'
 
     problem = load_problem(file_name)
     print_problem(problem)
 
-    A = problem['operator']
+    A = SelfAdjointMatrix(problem['operator'], def_pos=True)
+
     B = numpy.random.randn(A.shape[0], 10)
     b = numpy.sum(B, axis=1).reshape(A.shape[0], 1)
 
-    linSys = LinearSystem(SelfAdjointMatrix(A, def_pos=True), b)
-    blockLinSys = LinearSystem(SelfAdjointMatrix(A, def_pos=True), B)
+    linSys = LinearSystem(A, b)
+    blockLinSys = LinearSystem(A, B)
 
-    cg_output = ConjugateGradient(linSys, tol=1e-6, store=0).run()
-    res1 = numpy.linalg.norm(A.dot(cg_output['x']) - b)
-
-    bcg_output = BlockConjugateGradient(blockLinSys, tol=1e-6, store=10).run()
-    res2 = numpy.linalg.norm(A.dot(bcg_output['x']) - B)
-
+    cg_output = ConjugateGradient(linSys, tol=1e-7, store=1000).run()
     print(cg_output['report'])
+    bcg_output = BlockConjugateGradient(blockLinSys, tol=1e-7, store=0).run()
     print(bcg_output['report'])
 
-    pyplot.figure()
-    pyplot.semilogy(cg_output['cost'], cg_output['residues'])
-    pyplot.semilogy(bcg_output['cost'] / B.shape[1], bcg_output['residues'])
-    pyplot.xlabel('normalized FLOPs')
-    pyplot.ylabel('log relative residual')
-    pyplot.legend(['CG', 'BCG'])
+    S = numpy.hstack(cg_output['p'][:10])
+    H = LimitedMemoryPreconditioner(A, S)
+    cg_output_pr = ConjugateGradient(linSys, M=H, tol=1e-7, store=0).run()
+    print(cg_output_pr['report'])
 
-    S = bcg_output['P']
-    print(S.shape)
-    # H = LimitedMemoryPreconditioner(SelfAdjointMatrix(A, def_pos=True, sparse_format='csc'), S)
+    pyplot.figure()
+    pyplot.xlabel('normalized FLOPs')
+    pyplot.ylabel('log ||r|| / ||b||')
+    pyplot.semilogy(cg_output['cost'], cg_output['residues'])
+    pyplot.semilogy(cg_output_pr['cost'], cg_output_pr['residues'])
+    pyplot.semilogy(bcg_output['cost'] / B.shape[1], bcg_output['residues'])
+
+    # n = 500
     #
-    # t = time()
-    # cg_output = ConjugateGradient(linSys, M=H, tol=1e-5, store=40).run()
-    # t1 = time() - t
-    # res1 = numpy.linalg.norm(A.dot(cg_output['x']) - b)
-    #
-    # t = time()
-    # bcg_output = BlockConjugateGradient(blockLinSys, M=H, tol=1e-5, store=0).run()
-    # t2 = time() - t
-    # res2 = numpy.linalg.norm(A.dot(bcg_output['x']) - B)
-    #
-    # print('                                      time     |    ||r||')
-    # print('Algorithm ConjugateGradient:       {:1.4e}  |  {:1.4e}  |  {}'
-    #       .format(t1, res1, cg_output['n_it']))
-    # print('Algorithm BlockConjugateGradient : {:1.4e}  |  {:1.4e}  |  {}'
-    #       .format(t2, res2, bcg_output['n_it']))
+    # S1 = numpy.hstack(cg_output['P'][:n])
+    # S2 = numpy.hstack(cg_output['P'][-n:])
+    # Q1, _ = scipy.linalg.qr(S1, mode='economic')
+    # Q2, _ = scipy.linalg.qr(S2, mode='economic')
+    # e1 = numpy.sort(scipy.linalg.eigvals(Q1.T.dot(A.dot(Q1))).real, kind='mergesort')
+    # e2 = numpy.sort(scipy.linalg.eigvals(Q2.T.dot(A.dot(Q2))).real, kind='mergesort')
     #
     # pyplot.figure()
-    # pyplot.semilogy([i for i in range(cg_output['n_it'] + 1)], cg_output['residues'])
-    # pyplot.semilogy([i for i in range(cg_output['n_it'] + 1)], bcg_output['residues'])
-    # pyplot.legend(['CG', 'BCG'])
+    # pyplot.semilogy(problem['singular_values'])
+    # pyplot.semilogy([i * A.shape[0] / (n-1) for i in range(n)], numpy.flip(e1), '+')
+    # pyplot.semilogy([i * A.shape[0] / (n-1) for i in range(n)], numpy.flip(e2), 'x')
 
-    pyplot.figure()
-    pyplot.plot(bcg_output['rank'])
     pyplot.show()
