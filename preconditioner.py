@@ -12,7 +12,7 @@ Description:
 import numpy
 import scipy.linalg
 
-from linear_operator import LinearOperator, IdentityOperator, SelfAdjointMatrix
+from linear_operator import LinearOperator
 
 
 class PreconditionerError(Exception):
@@ -23,120 +23,204 @@ class PreconditionerError(Exception):
 
 class Preconditioner(LinearOperator):
 
-    def __init__(self, shape, dtype, direct=True):
+    def __init__(self, shape, dtype, lin_op, approx_inverse=True):
+
+        if not isinstance(lin_op, LinearOperator):
+            raise PreconditionerError('Preconditioner should be built from LinearOperator.')
 
         super().__init__(shape, dtype)
 
-        self.direct = direct
-
-    def _matvec(self, x):
-        return self._apply(x)
+        self.lin_op = lin_op
+        self.approx_inverse = approx_inverse
 
     def _apply(self, x):
         return None
 
+    def _matvec(self, x):
+        return self._apply(x)
+
     def apply(self, x):
         return self._apply(x)
 
+    def __add__(self, B):
+        return _SummedPreconditioner(self, B)
+
+    def __mul__(self, B):
+        return _ComposedPreconditioner(self, B)
+
+
+class _SummedPreconditioner(Preconditioner):
+
+    def __init__(self, A, B):
+
+        if not isinstance(A, Preconditioner) or not isinstance(B, Preconditioner):
+            raise PreconditionerError('Both operands in summation must be Preconditioner.')
+
+        if not (A.lin_op is B.lin_op):
+            raise PreconditionerError('Both operands must precondition the same linear operator.')
+
+        if A.shape != B.shape:
+            raise PreconditionerError('Both operands in summation must have the same shape.')
+
+        if A.approx_inverse != B.approx_inverse:
+            raise PreconditionerError('PBoth operands must be of same type.')
+
+        self.operands = (A, B)
+
+        dtype = numpy.find_common_type([A.dtype, B.dtype], [])
+
+        super().__init__(A.shape, dtype, A.lin_op)
+
+    def _apply(self, X):
+        return self.operands[0].dot(X) + self.operands[1].dot(X)
+
+
+class _ComposedPreconditioner(Preconditioner):
+
+    def __init__(self, A, B):
+
+        if not isinstance(A, Preconditioner) or not isinstance(B, Preconditioner):
+            raise PreconditionerError('Both operands must be Preconditioner.')
+
+        if not (A.lin_op is B.lin_op):
+            raise PreconditionerError('Both operands must precondition the same linear operator.')
+
+        if A.shape != B.shape:
+            raise PreconditionerError('Shape of operands do not match for composition.')
+
+        if A.approx_inverse != B.approx_inverse:
+            raise PreconditionerError('PBoth operands must be of same type.')
+
+        self.operands = (A, B)
+
+        shape = A.shape
+        dtype = numpy.find_common_type([A.dtype, B.dtype], [])
+
+        super().__init__(shape, dtype, A.lin_op)
+
+    def _apply(self, X):
+        Y = self.operands[0].dot(X)
+        Z = self.operands[1].dot(X)
+
+        return Y + Z - self.operands[1].dot(self.lin_op.dot(Y))
+    
 
 class IdentityPreconditioner(Preconditioner):
 
-    def __init__(self, n):
+    def __init__(self, lin_op):
 
-        if not isinstance(n, int) or n < 1:
-            raise PreconditionerError('IdentityPreconditioner should have a positive integer size.')
-
-        super().__init__((n, n), dtype=numpy.float64)
+        super().__init__(lin_op.shape, lin_op.dtype, lin_op)
 
     def _apply(self, x):
         return x
 
 
-class LimitedMemoryPreconditioner(Preconditioner):
+class CoarseGridCorrection(Preconditioner):
 
-    def __init__(self, A, S, M=None):
+    def __init__(self, lin_op, subspace):
 
-        if not isinstance(A, LinearOperator):
-            raise PreconditionerError('LMP should be built from LinearOperator.')
+        if not isinstance(subspace, (numpy.ndarray, numpy.matrix)):
+            raise PreconditionerError('CoarseGridCorrection projection subspace should be either a'
+                                      'numpy.ndarray or numpy.matrix.')
 
-        if not isinstance(S, numpy.ndarray) and not isinstance(S, numpy.matrix):
-            raise PreconditionerError('LMP subspace should be numpy.ndarray or numpy.matrix.')
+        if subspace.ndim != 2:
+            raise PreconditionerError('CoarseGridCorrection projection subspace should be 2-D.')
 
-        if M is None:
-            M = IdentityOperator(A.shape[0])
+        if subspace.shape[0] < subspace.shape[1]:
+            subspace = subspace.T
 
-        dtype = numpy.find_common_type([A.dtype, S.dtype, M.dtype], [])
+        n, k = subspace.shape
 
-        self._S = S
-        self._S_tilde = A.dot(self._S)
+        q, r = scipy.linalg.qr(subspace, mode='economic')
+        s = scipy.linalg.svd(r, compute_uv=False)
+        rank = numpy.sum(s * (1 / s[0]) > 1e-6)
 
-        A_tilde = S.T.dot(self._S_tilde)
+        self._subspace = q[:, :rank]
+        self._reduced_lin_op = self._subspace.T.dot(lin_op.dot(self._subspace))
 
         try:
-            self._L = scipy.linalg.cholesky(A_tilde)
-            self._U = self._L.T
-            self._P = None
+            L = scipy.linalg.cholesky(self._reduced_lin_op, lower=True)
+            self._l = L
+            self._u = L.T
+            self._p = None
 
         except numpy.linalg.LinAlgError:
-            self._P, self._L, self._U = scipy.linalg.lu(A_tilde)
+            P, L, U = scipy.linalg.lu(self._reduced_lin_op)
+            self._l = L
+            self._u = U
+            self._p = P
 
-        self._M = M
+        self.building_cost = self._get_building_cost(lin_op.apply_cost, n, k, rank)
+        self.size = self._matvec_cost()
 
-        super().__init__(A.shape, dtype, direct=True)
+        dtype = numpy.find_common_type([lin_op.dtype, subspace.dtype], [])
 
-    def _matvec(self, x):
-        return self._apply(x)
+        super().__init__(lin_op.shape, dtype, lin_op, approx_inverse=True)
+
+    @staticmethod
+    def _get_building_cost(lin_op_size, n, k, rank):
+        cost = 2*n*k**2 + 2*k**3            # R-SVD
+        cost += 2*k*lin_op_size + 2*n*k**2  # A_m = S^T*A*S
+        cost += 2/3*rank**3                 # PLU
+
+        return cost
+
+    def _matvec_cost(self):
+        cost = 2*self._subspace.size            # S^T * x
+        cost += 2*self._subspace.shape[1]**2    # P.T * x
+        cost += 2*self._subspace.shape[1]**2    # L^-1 * x
+        cost += 2*self._subspace.shape[1]**2    # U^-1 * x
+        cost = 2*self._subspace.size            # S * x
+        return cost
 
     def _apply(self, x):
 
-        y = self._S.T.dot(x)
+        y = self._subspace.T.dot(x)
 
-        if self._P is not None:
-            y = scipy.linalg.solve(self._P, y)
+        if self._p is not None:
+            y = self._p.T.dot(y)
 
-        z = scipy.linalg.solve_triangular(self._L, y, lower=True)
-        z = scipy.linalg.solve_triangular(self._U, z)
+        y = scipy.linalg.solve_triangular(self._l, y, lower=True)
+        y = scipy.linalg.solve_triangular(self._u, y)
 
-        f = self._M.dot(x) - self._M.dot(self._S_tilde.dot(z))
+        y = self._subspace.dot(y)
 
-        g = self._S_tilde.T.dot(f)
+        return y
 
-        if self._P is not None:
-            g = scipy.linalg.solve(self._P, g)
 
-        h = scipy.linalg.solve_triangular(self._L, g, lower=True)
-        h = scipy.linalg.solve_triangular(self._U, h)
+class LimitedMemoryPreconditioner(Preconditioner):
 
-        return f + self._S.dot(z - h)
+    def __init__(self, lin_op, subspace, M=None):
+
+        if M is not None and not isinstance(M, Preconditioner):
+            raise PreconditionerError('LMP first level preconditioner must be a Preconditioner.')
+
+        M = IdentityPreconditioner(lin_op) if M is None else M
+        Q = CoarseGridCorrection(lin_op, subspace)
+
+        dtype = numpy.find_common_type([Q.dtype, M.dtype], [])
+
+        super().__init__(lin_op.shape, dtype, lin_op)
+
+        self._apply = (Q * M * Q).apply
 
 
 if __name__ == "__main__":
 
-    import numpy
+    import scipy.sparse
 
-    from utils import qr, norm
+    from utils import norm
+    from linear_operator import SelfAdjointMatrix
 
     size = 100
+    subspace = 25
 
-    A = numpy.random.rand(size, size)
-    A = A * (A > 0.95)
-    A = A.T + A + numpy.diag([i**1.5 for i in range(size)])
-
-    S = numpy.random.rand(size, 4)
-    X = S.shape[1] * numpy.random.rand(S.shape[1], S.shape[1])
-    Z = S.dot(X)
-
+    A = scipy.sparse.rand(size, size, density=1e-3)
+    A = A.T + A + scipy.sparse.diags([i**1.125 for i in range(size)])
     A = SelfAdjointMatrix(A)
-    S = S
-    Z = Z
 
-    H1 = LimitedMemoryPreconditioner(A, S)
-    H2 = LimitedMemoryPreconditioner(A, Z)
+    S = numpy.random.rand(size, subspace)
 
-    b = numpy.random.rand(size, 1)
-
-    print("Invariance of LMP under change of basis Z = SX | {:1.2e}"
-          .format(norm(H1.dot(b) - H2.dot(b))))
-    print("LMP identity HAS = S | {:1.2e}"
-          .format(norm((H1.dot(A.dot(S)) - S))))
+    H = LimitedMemoryPreconditioner(A, S)
+    print(norm(H.dot(A.dot(S)) - S))
 
