@@ -23,12 +23,12 @@ class PreconditionerError(Exception):
 
 class Preconditioner(LinearOperator):
 
-    def __init__(self, shape, dtype, lin_op, approx_inverse=True):
+    def __init__(self, shape, dtype, apply_cost, lin_op, approx_inverse=True):
 
         if not isinstance(lin_op, LinearOperator):
             raise PreconditionerError('Preconditioner should be built from LinearOperator.')
 
-        super().__init__(shape, dtype)
+        super().__init__(shape, dtype, apply_cost)
 
         self.lin_op = lin_op
         self.approx_inverse = approx_inverse
@@ -67,9 +67,12 @@ class _SummedPreconditioner(Preconditioner):
 
         self.operands = (A, B)
 
+        shape = A.shape
         dtype = numpy.find_common_type([A.dtype, B.dtype], [])
+        lin_op = A.lin_op
+        apply_cost = A.apply_cost + B.apply_cost
 
-        super().__init__(A.shape, dtype, A.lin_op)
+        super().__init__(shape, dtype, apply_cost, lin_op)
 
     def _apply(self, X):
         return self.operands[0].dot(X) + self.operands[1].dot(X)
@@ -95,8 +98,10 @@ class _ComposedPreconditioner(Preconditioner):
 
         shape = A.shape
         dtype = numpy.find_common_type([A.dtype, B.dtype], [])
+        lin_op = A.lin_op
+        apply_cost = A.apply_cost + 2 * B.apply_cost + lin_op.apply_cost + 2*shape[0]
 
-        super().__init__(shape, dtype, A.lin_op)
+        super().__init__(shape, dtype, apply_cost, lin_op)
 
     def _apply(self, X):
         Y = self.operands[0].dot(X)
@@ -109,7 +114,7 @@ class IdentityPreconditioner(Preconditioner):
 
     def __init__(self, lin_op):
 
-        super().__init__(lin_op.shape, lin_op.dtype, lin_op)
+        super().__init__(lin_op.shape, lin_op.dtype, 0, lin_op)
 
     def _apply(self, x):
         return x
@@ -155,7 +160,7 @@ class CoarseGridCorrection(Preconditioner):
 
         dtype = numpy.find_common_type([lin_op.dtype, subspace.dtype], [])
 
-        super().__init__(lin_op.shape, dtype, lin_op, approx_inverse=True)
+        super().__init__(lin_op.shape, dtype, self._matvec_cost(), lin_op, approx_inverse=True)
 
     @staticmethod
     def _get_building_cost(lin_op_size, n, k, rank):
@@ -199,8 +204,9 @@ class LimitedMemoryPreconditioner(Preconditioner):
         Q = CoarseGridCorrection(lin_op, subspace)
 
         dtype = numpy.find_common_type([Q.dtype, M.dtype], [])
+        apply_cost = (Q * M * Q).apply_cost
 
-        super().__init__(lin_op.shape, dtype, lin_op)
+        super().__init__(lin_op.shape, dtype, apply_cost, lin_op)
 
         self._apply = (Q * M * Q).apply
 
@@ -212,15 +218,15 @@ if __name__ == "__main__":
     from utils import norm
     from linear_operator import SelfAdjointMatrix
 
-    size = 100
-    subspace = 25
+    size = 200
+    sub_size = 50
 
-    A = scipy.sparse.rand(size, size, density=1e-3)
-    A = A.T + A + scipy.sparse.diags([i**1.125 for i in range(size)])
-    A = SelfAdjointMatrix(A)
+    A_ = scipy.sparse.rand(size, size, density=1e-3)
+    A_ = A_.T + A_ + scipy.sparse.diags([i**1.125 for i in range(size)])
+    A_ = SelfAdjointMatrix(A_)
 
-    S = numpy.random.rand(size, subspace)
+    S = numpy.random.rand(size, sub_size)
 
-    H = LimitedMemoryPreconditioner(A, S)
-    print(norm(H.dot(A.dot(S)) - S))
-
+    H = LimitedMemoryPreconditioner(A_, S)
+    print(H.apply_cost)
+    print(norm(H.dot(A_.dot(S)) - S))
