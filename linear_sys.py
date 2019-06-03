@@ -330,7 +330,7 @@ class ConjugateGradient(_LinearSolver):
         total_cost += 2*n                   # self.x
         total_cost += 2*n                   # r_k
         total_cost += 2*n                   # residue
-        total_cost += 0                     # z_k
+        total_cost += self.M_i.apply_cost   # z_k
         total_cost += 4*n + 1               # beta
         total_cost += 2*n                   # p_k
 
@@ -440,7 +440,7 @@ class BlockConjugateGradient(_LinearSolver):
         total_cost += n*k + 2*r*n*k             # self.x
         total_cost += n*k + 2*r*n*k             # R_k
         total_cost += 2*n*r**2                  # residue
-        total_cost += 0                         # Z_k
+        total_cost += self.M_i.apply_cost       # Z_k
         total_cost += 2*(r*n*r + 3*r*r*k)       # beta
         total_cost += 2*n*r*r + n*r             # P_k
 
@@ -509,7 +509,7 @@ if __name__ == '__main__':
     bcg_output = BlockConjugateGradient(blockLinSys, tol=1e-7, store=0).run()
     print(bcg_output['report'])
 
-    S = numpy.hstack(cg_output['p'][:10])
+    S = numpy.hstack(cg_output['p'][150:350])
     H = LimitedMemoryPreconditioner(A, S)
     cg_output_pr = ConjugateGradient(linSys, M=H, tol=1e-7, store=0).run()
     print(cg_output_pr['report'])
