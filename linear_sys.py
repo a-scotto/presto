@@ -497,54 +497,54 @@ if __name__ == '__main__':
     from problems.loader import load_problem, print_problem
     from preconditioner import LimitedMemoryPreconditioner
 
+    # Load problem
     file_name = 'Kuu'
-
     problem = load_problem(file_name)
     print_problem(problem)
 
+    # Linear operator
     A = SelfAdjointMatrix(problem['operator'], def_pos=True)
-
-    B = numpy.eye(A.shape[0])[:, :50]
-    b = numpy.sum(B, axis=1, keepdims=True)
-    X_0 = numpy.random.randn(B.shape[0], B.shape[1])
-    x_0 = numpy.sum(B, axis=1, keepdims=True)
-
+    b = numpy.eye(problem['shape'][0])[:, [0]]
     linSys = LinearSystem(A, b)
+
+    x_0 = numpy.random.randn(b.size, 1)
+
+    cg = ConjugateGradient(linSys, x_0=x_0, tol=1e-2, store=A.shape[0]).run()
+    print(cg['report'])
+
+    P = numpy.hstack(cg['p'][-50:])
+
+    y = numpy.vstack([scipy.linalg.solve(P.T.dot(P), P.T.dot(b)), [1]])
+    b_tilde = P.dot(y[:-1])
+    B = numpy.hstack([P, b - b_tilde])
+    X_0 = numpy.random.randn(B.shape[0], B.shape[1])
+
     blockLinSys = LinearSystem(A, B)
 
-    cg = ConjugateGradient(linSys, x_0=x_0, tol=1e-5, store=0).run()
-    print(cg['report'])
-    bcg = BlockConjugateGradient(blockLinSys, x_0=X_0, tol=1e-5, store=0).run()
+    bcg = BlockConjugateGradient(blockLinSys,
+                                 x_0=X_0,
+                                 tol=1e-4,
+                                 rank_tol=1e-10,
+                                 store=A.shape[0]).run()
     print(bcg['report'])
 
-    # S = numpy.hstack(cg_output['p'][150:350])
-    # H = LimitedMemoryPreconditioner(A, S)
-    # cg_output_pr = ConjugateGradient(linSys, M=H, tol=1e-7, store=0).run()
-    # print(cg_output_pr['report'])
+    P = numpy.stack(bcg['P'])
 
-    pyplot.figure()
-    pyplot.xlabel('normalized FLOPs')
-    pyplot.ylabel('log ||r|| / ||b||')
-    pyplot.semilogy(cg['cost'], cg['residues'])
-    pyplot.semilogy(bcg['cost'] / numpy.linalg.matrix_rank(B), bcg['residues'])
+    # Linear operator
+    gamma = float(b.T.dot(b) / b.T.dot(problem['operator'].dot(b)))
+    A_scaled = SelfAdjointMatrix(gamma * problem['operator'], def_pos=True)
+    b = numpy.ones((A.shape[0], 1))
+    secondLinSys = LinearSystem(A, b)
 
-    pyplot.figure()
-    pyplot.plot(bcg['rank'])
+    for i in range(P.shape[2]):
+        S_i = P[:, :, i].T
+        H = LimitedMemoryPreconditioner(A, S_i)
+        pcg = ConjugateGradient(secondLinSys, M=H, x_0=x_0, tol=1e-6, store=0).run()
+        print(pcg['report'])
+        pyplot.semilogy(pcg['residues'] / pcg['residues'][0])
 
-    # pyplot.semilogy(bcg_output['cost'] / B.shape[1], bcg_output['residues'])
-
-    # n = 500
-    #
-    # S1 = numpy.hstack(cg_output['P'][:n])
-    # S2 = numpy.hstack(cg_output['P'][-n:])
-    # Q1, _ = scipy.linalg.qr(S1, mode='economic')
-    # Q2, _ = scipy.linalg.qr(S2, mode='economic')
-    # e1 = numpy.sort(scipy.linalg.eigvals(Q1.T.dot(A.dot(Q1))).real, kind='mergesort')
-    # e2 = numpy.sort(scipy.linalg.eigvals(Q2.T.dot(A.dot(Q2))).real, kind='mergesort')
-    #
-    # pyplot.figure()
-    # pyplot.semilogy(problem['singular_values'])
-    # pyplot.semilogy([i * A.shape[0] / (n-1) for i in range(n)], numpy.flip(e1), '+')
-    # pyplot.semilogy([i * A.shape[0] / (n-1) for i in range(n)], numpy.flip(e2), 'x')
+    cg = ConjugateGradient(secondLinSys, M=None, x_0=x_0, tol=1e-6, store=0).run()
+    print(cg['report'])
+    pyplot.semilogy(cg['residues'] / cg['residues'][0])
 
     pyplot.show()
