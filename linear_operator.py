@@ -12,8 +12,6 @@ Description:
 import numpy
 import scipy.sparse
 
-from utils import qr, convert_to_col
-
 from scipy.sparse.linalg import LinearOperator as scipyLinearOperator
 
 
@@ -215,6 +213,13 @@ class MatrixOperator(LinearOperator):
             raise MatrixOperatorError('Array must have shape of the form (n, 1).')
 
         return self.A.H.dot(X)
+
+    def dot(self, x):
+
+        if scipy.sparse.isspmatrix(x):
+            return self.A @ x
+        else:
+            return super().dot(x)
 
     def get_format(self):
 
