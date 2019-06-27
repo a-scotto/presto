@@ -30,7 +30,6 @@ class MatrixOperatorError(Exception):
 class LinearOperator(scipyLinearOperator):
 
     def __init__(self, shape, dtype, apply_cost=None):
-
         if not isinstance(shape, tuple) or len(shape) != 2:
             raise LinearOperatorError('Shape must be a tuple of the form (n, p).')
 
@@ -68,7 +67,6 @@ class LinearOperator(scipyLinearOperator):
 class _ScaledLinearOperator(LinearOperator):
 
     def __init__(self, A, scalar):
-
         if not isinstance(A, LinearOperator):
             raise LinearOperatorError('External product should involve a LinearOperator.')
 
@@ -91,7 +89,6 @@ class _ScaledLinearOperator(LinearOperator):
 class _SummedLinearOperator(LinearOperator):
 
     def __init__(self, A, B):
-
         if not isinstance(A, LinearOperator) or not isinstance(B, LinearOperator):
             raise LinearOperatorError('Both operands in summation must be LinearOperator.')
 
@@ -115,7 +112,6 @@ class _SummedLinearOperator(LinearOperator):
 class _ComposedLinearOperator(LinearOperator):
 
     def __init__(self, A, B):
-
         if not isinstance(A, LinearOperator) or not isinstance(B, LinearOperator):
             raise LinearOperatorError('Both operands must be LinearOperator.')
 
@@ -140,7 +136,6 @@ class _ComposedLinearOperator(LinearOperator):
 class _AdjointLinearOperator(LinearOperator):
 
     def __init__(self, A):
-
         if not isinstance(A, LinearOperator):
             raise LinearOperatorError('Adjoint is only defined for LinearOperator.')
 
@@ -155,7 +150,6 @@ class _AdjointLinearOperator(LinearOperator):
 class IdentityOperator(LinearOperator):
 
     def __init__(self, size):
-
         if not isinstance(size, int) or size < 1:
             raise LinearOperatorError('IdentityOperator should have a positive integer size.')
 
@@ -170,10 +164,7 @@ class IdentityOperator(LinearOperator):
 
 class MatrixOperator(LinearOperator):
 
-    _sparse_formats = ['csr', 'csc', 'dia', 'bsr', 'coo', 'dok', 'lil']
-
     def __init__(self, A):
-
         if isinstance(A, (numpy.ndarray, numpy.matrix)):
             self.sparse = False
 
@@ -189,7 +180,6 @@ class MatrixOperator(LinearOperator):
         super().__init__(A.shape, A.dtype, A.size)
 
     def _matvec(self, X):
-
         X = numpy.asanyarray(X)
         n, p = self.shape
 
@@ -202,7 +192,6 @@ class MatrixOperator(LinearOperator):
         return self.A.dot(X)
 
     def _rmatvec(self, X):
-
         X = numpy.asanyarray(X)
         n, p = self.shape
 
@@ -215,14 +204,12 @@ class MatrixOperator(LinearOperator):
         return self.A.H.dot(X)
 
     def dot(self, x):
-
         if scipy.sparse.isspmatrix(x):
-            return self.A @ x
+            return self.A.dot(x)
         else:
             return super().dot(x)
 
     def get_format(self):
-
         if self.sparse:
             return self.A.getformat()
         else:
@@ -232,7 +219,6 @@ class MatrixOperator(LinearOperator):
 class DiagonalMatrix(MatrixOperator):
 
     def __init__(self, diagonals):
-
         if isinstance(diagonals, list):
             diagonals = numpy.asarray(diagonals)
 
@@ -244,7 +230,6 @@ class DiagonalMatrix(MatrixOperator):
 class TriangularMatrix(MatrixOperator):
 
     def __init__(self, A, lower=False):
-
         if not hasattr(A, 'shape') or len(A.shape) != 2 or A.shape[0] != A.shape[1]:
             raise MatrixOperatorError('TriangularMatrix matrix must be of square shape.')
 
@@ -259,7 +244,6 @@ class TriangularMatrix(MatrixOperator):
 class SelfAdjointMatrix(MatrixOperator):
 
     def __init__(self, A, def_pos=False):
-
         if not hasattr(A, 'shape') or len(A.shape) != 2 or A.shape[0] != A.shape[1]:
             raise MatrixOperatorError('SelfAdjointMatrix matrix must be of square shape.')
 
