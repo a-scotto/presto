@@ -10,7 +10,9 @@ Description:
 """
 
 import numpy
+import random
 import scipy.linalg
+import scipy.sparse
 
 
 class InnerProductError(Exception):
@@ -111,7 +113,7 @@ def qr(X, ip_B=None, reorthos=1):
     :param X: array with ``shape==(N,k)``
     :param ip_B: (optional) inner product, see :py:meth:`inner`.
     :param reorthos: (optional) number of reorthogonalizations. Defaults to 1 (i.e. 2 runs of
-    modified Gram-Schmidt) which should be enough in most cases (TODO: add reference).
+    modified Gram-Schmidt) which should be enough in most cases
 
     :return: Q, R where :math:`X=QR` with :math:`\\langle Q,Q \\rangle=I_k` and R upper triangular.
     """
@@ -139,3 +141,32 @@ def qr(X, ip_B=None, reorthos=1):
                 Q[:, [i]] /= R[i, i]
 
         return Q, R
+
+
+def split_lhs(lhs, n_slice, randomize=True, return_sparse=True):
+
+    lhs = convert_to_col(lhs)
+    slice_size = lhs.size // n_slice + 1
+    index = [k for k in range(lhs.size)]
+
+    if randomize:
+        random.shuffle(index)
+
+    lhs_slices = []
+
+    for k in range(n_slice):
+        if k < n_slice - 1:
+            ind = index[k * slice_size:(k + 1) * slice_size]
+        else:
+            ind = index[k * slice_size:]
+
+        lhs_s = numpy.zeros_like(lhs)
+        lhs_s[ind] = lhs[ind]
+        lhs_slices.append(lhs_s)
+
+    lhs_slices = numpy.hstack(lhs_slices)
+
+    if return_sparse:
+        lhs_slices = scipy.sparse.csr_matrix(lhs_slices)
+
+    return lhs_slices
