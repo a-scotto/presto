@@ -10,7 +10,6 @@ Description:
 """
 
 import numpy
-import utils
 import scipy.linalg
 
 from linear_operator import LinearOperator, SelfAdjointMatrix
@@ -47,7 +46,7 @@ class LinearSystem(object):
         if not isinstance(lhs, numpy.ndarray):
             raise LinearSystemError('LinearSystem left-hand side must be numpy.ndarray')
 
-        if lhs.shape[0] != A.shape[1]:
+        if lhs.shape[0] != lin_op.shape[1]:
             raise LinearSystemError('Linear map and left-hand side shapes do not match.')
 
         self.lhs, self.scaling = self._normalize_lhs(lhs)
@@ -150,12 +149,12 @@ class _SolverMonitor(object):
     historic of the residues.
     """
 
-    def __init__(self, history, auxiliaries=None, store=False):
+    def __init__(self, history, auxiliaries=None, buffer=False):
         """
 
         :param history:
         :param auxiliaries:
-        :param store:
+        :param buffer:
         """
 
         # Sanitize the initialization of class attributes
@@ -180,14 +179,14 @@ class _SolverMonitor(object):
         self._auxiliaries = auxiliaries
         self.n_aux = len(auxiliaries)
 
-        if store and not isinstance(store, int) and not store >= 0:
-            raise LinearSolverError('Argument store must be either "False" or positive integer.')
+        if buffer and not isinstance(buffer, int) and not buffer >= 0:
+            raise LinearSolverError('Argument buffer must be either "False" or positive integer.')
 
-        if store:
+        if buffer:
             for i in range(len(self._auxiliaries)):
                 self._auxiliaries[i] = [self._auxiliaries[i]]
 
-        self._store = 0 if not store else store
+        self._buffer = 0 if not buffer else buffer
         self.n_it = 0
 
     def update(self, history, auxiliaries):
@@ -202,17 +201,16 @@ class _SolverMonitor(object):
             if not isinstance(auxiliaries[i], numpy.ndarray):
                 raise LinearSolverError('Auxiliaries must be numpy.ndarray.')
 
-            if not self._store:
+            if not self._buffer:
                 self._auxiliaries[i] = auxiliaries[i]
             else:
-                if len(self._auxiliaries[i]) < self._store:
+                if len(self._auxiliaries[i]) < self._buffer:
                     self._auxiliaries[i].append(auxiliaries[i])
                 else:
                     del self._auxiliaries[i][0]
                     self._auxiliaries[i].append(auxiliaries[i])
 
         if len(history) != self.n_hist:
-            print(len(history), self.n_hist)
             raise LinearSolverError('Updating a different number of history items than expected.')
 
         for i in range(len(history)):
@@ -225,7 +223,7 @@ class _SolverMonitor(object):
         self.n_it += 1
 
     def get_previous(self, index=-1):
-        if self._store:
+        if self._buffer:
             previous_auxiliary = []
             for aux_i in self._auxiliaries:
                 previous_auxiliary.append(aux_i[index])
@@ -236,7 +234,7 @@ class _SolverMonitor(object):
 
     def get_auxiliaries(self):
         ret = []
-        if not self._store:
+        if not self._buffer:
             return self._auxiliaries
 
         for i in range(self.n_aux):
@@ -260,18 +258,16 @@ class _SolverMonitor(object):
         else:
             return ret.__iter__()
 
-    def report(self, solver_name):
-        residue_i = self._history[0][0]
-        residue_f = self._history[0][-1]
+    def report(self, solver_name, initial_res, final_res):
         string = '{:25}: run of {:4} iteration(s)  |  '.format(solver_name, self.n_it)
-        string += 'Absolute 2-norm residual = {:1.4e}  |  '.format(residue_f)
-        string += 'Relative 2-norm residual = {:1.4e}'.format(residue_f / residue_i)
+        string += 'Absolute 2-norm residual = {:1.4e}  |  '.format(final_res)
+        string += 'Relative 2-norm residual = {:1.4e}'.format(final_res / initial_res)
         return string
 
 
 class ConjugateGradient(_LinearSolver):
 
-    def __init__(self, lin_sys, x_0=None, M=None, store=None, tol=1e-5):
+    def __init__(self, lin_sys, x_0=None, M=None, tol=1e-5, buffer=None, arnoldi=True):
         if not isinstance(lin_sys.lin_op, SelfAdjointMatrix) and not lin_sys.lin_op.def_pos:
             raise LinearSolverError('Conjugate Gradient only apply to s.d.p linear map.')
 
@@ -281,8 +277,9 @@ class ConjugateGradient(_LinearSolver):
         if lin_sys.block:
             raise LinearSolverError('Conjugate Gradient only apply to simple left-hand side.')
 
-        self.store = store
+        self.buffer = buffer
         self.total_cost = 0
+        self.arnoldi = ([], []) if arnoldi else None
 
         super().__init__(lin_sys, x_0, M, tol, lin_sys.shape[0])
 
@@ -300,24 +297,47 @@ class ConjugateGradient(_LinearSolver):
         p = numpy.copy(z)
         auxiliaries = [z, p, r]
 
-        residue = utils.norm(r)
+        residue = numpy.linalg.norm(r)
         cost = 2*operator_cost + n
         history = [residue, cost]
 
         self.tol *= residue
         self.total_cost += cost
 
-        return _SolverMonitor(history, auxiliaries=auxiliaries, store=self.store)
+        return _SolverMonitor(history, auxiliaries=auxiliaries, buffer=self.buffer)
 
     def _finalize(self):
-
         residues, cost = self.monitor.get_history()
         z, p, r = self.monitor.get_auxiliaries()
+        report = self.monitor.report('Conjugate Gradient', residues[0], residues[-1])
 
-        output = {'report': self.monitor.report('Conjugate Gradient'),
+        arnoldi = None
+
+        if self.arnoldi is not None:
+
+            if len(self.arnoldi[1]) == len(self.arnoldi[0]):
+                del self.arnoldi[1][-1]
+
+            d_k = self.arnoldi[0]
+            beta_k = self.arnoldi[1]
+
+            t_diag = [float(d_k[0] / residues[0]**2)]
+            t_sub_diag = []
+
+            for i in range(len(self.arnoldi[1])):
+
+                t_diag.append(float((d_k[i + 1] + beta_k[i]**2 * d_k[i]) / residues[i + 1]**2))
+                t_sub_diag.append(float(-beta_k[i] * d_k[i] / residues[i] / residues[i + 1]))
+
+            arnoldi = (t_diag, t_sub_diag)
+
+        residues *= self.lin_sys.scaling
+
+        output = {'report': report,
                   'x': self.x_0 + self.x * self.lin_sys.scaling,
                   'n_it': self.monitor.n_it,
                   'residues': residues,
+                  'arnoldi': arnoldi,
                   'cost': cost,
                   'z': z,
                   'p': p,
@@ -326,7 +346,6 @@ class ConjugateGradient(_LinearSolver):
         return output
 
     def _iteration_cost(self):
-
         operator_cost = self.lin_sys.lin_op.apply_cost
         n, _ = self.lin_sys.lhs.shape
         total_cost = 0
@@ -348,12 +367,14 @@ class ConjugateGradient(_LinearSolver):
             z, p, r = self.monitor.get_previous()
 
             q_k = self.lin_sys.lin_op.dot(p)
+            rho_k = z.T.dot(r)
+            d_k = p.T.dot(q_k)
 
-            alpha = z.T.dot(r) / p.T.dot(q_k)
+            alpha = rho_k / d_k
             self.x += alpha * p
             r_k = r - alpha * q_k
 
-            residue = utils.norm(r_k)
+            residue = numpy.linalg.norm(r_k)
             self.total_cost += self.iteration_cost
 
             if residue < self.tol:
@@ -361,10 +382,14 @@ class ConjugateGradient(_LinearSolver):
                 break
 
             z_k = self.M_i.apply(r_k)
-            beta = z_k.T.dot(r_k) / z.T.dot(r)
+            beta = z_k.T.dot(r_k) / rho_k
             p_k = z_k + beta * p
 
             self.monitor.update([residue, self.total_cost], [z_k, p_k, r_k])
+
+            if self.arnoldi is not None:
+                self.arnoldi[0].append(d_k)
+                self.arnoldi[1].append(beta)
 
         output = self._finalize()
 
@@ -373,7 +398,7 @@ class ConjugateGradient(_LinearSolver):
 
 class BlockConjugateGradient(_LinearSolver):
 
-    def __init__(self, lin_sys, x_0=None, M=None, store=None, tol=1e-5, rank_tol=1e-5):
+    def __init__(self, lin_sys, x_0=None, M=None, buffer=None, tol=1e-5, rank_tol=1e-5):
         if not isinstance(lin_sys.lin_op, SelfAdjointMatrix) and not lin_sys.lin_op.def_pos:
             raise LinearSolverError('Block Conjugate Gradient only apply to s.d.p linear map.')
 
@@ -383,7 +408,7 @@ class BlockConjugateGradient(_LinearSolver):
         if not lin_sys.block:
             raise LinearSolverError('Block Conjugate Gradient only apply to block left-hand side.')
 
-        self.store = store
+        self.buffer = buffer
         self.total_cost = 0
         self.rank_tol = rank_tol
 
@@ -400,31 +425,36 @@ class BlockConjugateGradient(_LinearSolver):
         r = scipy.linalg.qr(R, mode='r')[0]
         s = scipy.linalg.svd(r, compute_uv=False)
         rank = numpy.sum(s * (1 / s[0]) > self.rank_tol)
+        eps_rank = s[-1] / s[0]
 
         Z = self.M_i.apply(R[:, :rank])
         P = numpy.copy(Z)
         auxiliaries = [Z, P, R]
 
-        residue = utils.norm(R)
+        residue = numpy.linalg.norm(R[:, :rank])
         cost = 2*operator_cost*k + n*k + 2 * self.lin_sys.lhs.size
-        history = [residue, cost, rank]
+        history = [residue, cost, rank, eps_rank]
 
         self.tol *= residue
         self.total_cost += cost
 
-        return _SolverMonitor(history, auxiliaries=auxiliaries, store=self.store)
+        return _SolverMonitor(history, auxiliaries=auxiliaries, buffer=self.buffer)
 
     def _finalize(self):
+        residues, cost, rank, eps_rank = self.monitor.get_history()
+        residues *= numpy.linalg.norm(self.lin_sys.scaling)
 
-        residues, cost, rank = self.monitor.get_history()
         Z, P, R = self.monitor.get_auxiliaries()
 
-        output = {'report': self.monitor.report('Block Conjugate Gradient'),
+        report = self.monitor.report('Block Conjugate Gradient', residues[0], residues[-1])
+
+        output = {'report': report,
                   'x': self.x_0 + self.x * self.lin_sys.scaling,
                   'n_it': self.monitor.n_it,
                   'residues': residues,
                   'cost': cost,
                   'rank': rank,
+                  'eps_rank': eps_rank,
                   'Z': Z,
                   'P': P,
                   'R': R}
@@ -432,7 +462,6 @@ class BlockConjugateGradient(_LinearSolver):
         return output
 
     def _iteration_cost(self, r):
-
         operator_cost = self.lin_sys.lin_op.apply_cost
         n, k = self.lin_sys.lhs.shape
         total_cost = 0
@@ -452,7 +481,6 @@ class BlockConjugateGradient(_LinearSolver):
         return total_cost
 
     def run(self, verbose=False):
-
         for k in range(self.maxiter):
 
             Z, P, R = self.monitor.get_previous()
@@ -462,6 +490,7 @@ class BlockConjugateGradient(_LinearSolver):
             delta = P.T.dot(Q_k)
             u, s, v = numpy.linalg.svd(delta)
             rank = numpy.sum(s * (1 / s[0]) > self.rank_tol)
+            eps_rank = s[-1] / s[0]
 
             s_inv = numpy.zeros_like(s)
             s_inv[:rank] = 1 / s[:rank]
@@ -469,82 +498,22 @@ class BlockConjugateGradient(_LinearSolver):
             alpha = v.T @ numpy.diag(s_inv) @ u.T @ Z.T.dot(R)
             self.x += P.dot(alpha)
 
-            R_k = R - Q_k.dot(alpha)
+            R -= Q_k.dot(alpha)
 
-            residue = utils.norm(R_k[:, :rank])
+            residue = numpy.linalg.norm(R[:, :rank])
             self.total_cost += self._iteration_cost(rank)
 
             if residue < self.tol:
-                self.monitor.update([residue, self.total_cost, rank], [])
+                self.monitor.update([residue, self.total_cost, rank, eps_rank], [])
                 break
 
-            Z_k = self.M_i.apply(R_k[:, :rank])
+            Z = self.M_i.apply(R[:, :rank])
 
-            beta = - v.T @ numpy.diag(s_inv) @ u.T @ Q_k.T.dot(Z_k)
-            P_k = Z_k + P.dot(beta)
+            beta = - v.T @ numpy.diag(s_inv) @ u.T @ Q_k.T.dot(Z)
+            P = Z + P.dot(beta)
 
-            self.monitor.update([residue, self.total_cost, rank], [Z_k, P_k, R_k])
+            self.monitor.update([residue, self.total_cost, rank, eps_rank], [Z, P, R])
 
         output = self._finalize()
 
         return output
-
-
-if __name__ == '__main__':
-
-    from numpy.linalg import norm
-    from matplotlib import pyplot
-    from problems.loader import load_problem, print_problem
-    from preconditioner import LimitedMemoryPreconditioner
-
-    # Load problem
-    file_name = 'Kuu'
-    problem = load_problem(file_name)
-    print_problem(problem)
-
-    # Linear operator
-    A = SelfAdjointMatrix(problem['operator'], def_pos=True)
-    b = numpy.eye(problem['shape'][0])[:, [0]]
-    linSys = LinearSystem(A, b)
-
-    x_0 = numpy.random.randn(b.size, 1)
-
-    cg = ConjugateGradient(linSys, x_0=x_0, tol=1e-2, store=A.shape[0]).run()
-    print(cg['report'])
-
-    P = numpy.hstack(cg['p'][-50:])
-
-    y = numpy.vstack([scipy.linalg.solve(P.T.dot(P), P.T.dot(b)), [1]])
-    b_tilde = P.dot(y[:-1])
-    B = numpy.hstack([P, b - b_tilde])
-    X_0 = numpy.random.randn(B.shape[0], B.shape[1])
-
-    blockLinSys = LinearSystem(A, B)
-
-    bcg = BlockConjugateGradient(blockLinSys,
-                                 x_0=X_0,
-                                 tol=1e-4,
-                                 rank_tol=1e-10,
-                                 store=A.shape[0]).run()
-    print(bcg['report'])
-
-    P = numpy.stack(bcg['P'])
-
-    # Linear operator
-    gamma = float(b.T.dot(b) / b.T.dot(problem['operator'].dot(b)))
-    A_scaled = SelfAdjointMatrix(gamma * problem['operator'], def_pos=True)
-    b = numpy.ones((A.shape[0], 1))
-    secondLinSys = LinearSystem(A, b)
-
-    for i in range(P.shape[2]):
-        S_i = P[:, :, i].T
-        H = LimitedMemoryPreconditioner(A, S_i)
-        pcg = ConjugateGradient(secondLinSys, M=H, x_0=x_0, tol=1e-6, store=0).run()
-        print(pcg['report'])
-        pyplot.semilogy(pcg['residues'] / pcg['residues'][0])
-
-    cg = ConjugateGradient(secondLinSys, M=None, x_0=x_0, tol=1e-6, store=0).run()
-    print(cg['report'])
-    pyplot.semilogy(cg['residues'] / cg['residues'][0])
-
-    pyplot.show()
