@@ -11,6 +11,7 @@ Description:
 
 import numpy
 import scipy.linalg
+import scipy.sparse.linalg
 
 from linear_operator import LinearOperator
 
@@ -24,7 +25,6 @@ class PreconditionerError(Exception):
 class Preconditioner(LinearOperator):
 
     def __init__(self, shape, dtype, apply_cost, lin_op, approx_inverse=True):
-
         if not isinstance(lin_op, LinearOperator):
             raise PreconditionerError('Preconditioner should be built from LinearOperator.')
 
@@ -42,6 +42,9 @@ class Preconditioner(LinearOperator):
     def apply(self, x):
         return self._apply(x)
 
+    def __rmul__(self, scalar):
+        return _ScaledPreconditioner(self, scalar)
+
     def __add__(self, B):
         return _SummedPreconditioner(self, B)
 
@@ -49,10 +52,31 @@ class Preconditioner(LinearOperator):
         return _ComposedPreconditioner(self, B)
 
 
+class _ScaledPreconditioner(Preconditioner):
+
+    def __init__(self, A, scalar):
+        if not isinstance(A, Preconditioner):
+            raise PreconditionerError('External product should involve a Preconditioner.')
+
+        if not numpy.isscalar(scalar):
+            raise PreconditionerError('External product should involve a scalar.')
+
+        self.operands = (scalar, A)
+
+        shape = A.shape
+        dtype = numpy.find_common_type([A.dtype], [type(scalar)])
+        lin_op = A.lin_op
+        apply_cost = A.apply_cost
+
+        super().__init__(shape, dtype, apply_cost, lin_op)
+
+    def _apply(self, X):
+        return self.operands[0] * self.operands[1].dot(X)
+
+
 class _SummedPreconditioner(Preconditioner):
 
     def __init__(self, A, B):
-
         if not isinstance(A, Preconditioner) or not isinstance(B, Preconditioner):
             raise PreconditionerError('Both operands in summation must be Preconditioner.')
 
@@ -81,7 +105,6 @@ class _SummedPreconditioner(Preconditioner):
 class _ComposedPreconditioner(Preconditioner):
 
     def __init__(self, A, B):
-
         if not isinstance(A, Preconditioner) or not isinstance(B, Preconditioner):
             raise PreconditionerError('Both operands must be Preconditioner.')
 
@@ -99,21 +122,19 @@ class _ComposedPreconditioner(Preconditioner):
         shape = A.shape
         dtype = numpy.find_common_type([A.dtype, B.dtype], [])
         lin_op = A.lin_op
-        apply_cost = A.apply_cost + 2 * B.apply_cost + lin_op.apply_cost + 2*shape[0]
+        apply_cost = A.apply_cost + B.apply_cost + lin_op.apply_cost
 
         super().__init__(shape, dtype, apply_cost, lin_op)
 
     def _apply(self, X):
         Y = self.operands[0].dot(X)
-        Z = self.operands[1].dot(X)
-
-        return Y + Z - self.operands[1].dot(self.lin_op.dot(Y))
+        Z = X - self.lin_op.dot(Y)
+        return Y + self.operands[1].dot(Z)
     
 
 class IdentityPreconditioner(Preconditioner):
 
     def __init__(self, lin_op):
-
         super().__init__(lin_op.shape, lin_op.dtype, 0, lin_op)
 
     def _apply(self, x):
@@ -122,11 +143,12 @@ class IdentityPreconditioner(Preconditioner):
 
 class CoarseGridCorrection(Preconditioner):
 
-    def __init__(self, lin_op, subspace):
+    def __init__(self, lin_op, subspace, rank_tol=1e-7):
+        self.is_sparse = scipy.sparse.isspmatrix(subspace)
 
-        if not isinstance(subspace, (numpy.ndarray, numpy.matrix)):
+        if not isinstance(subspace, (numpy.ndarray, numpy.matrix)) and not self.is_sparse:
             raise PreconditionerError('CoarseGridCorrection projection subspace should be either a'
-                                      'numpy.ndarray or numpy.matrix.')
+                                      'numpy.ndarray or numpy.matrix or a sparse matrix.')
 
         if subspace.ndim != 2:
             raise PreconditionerError('CoarseGridCorrection projection subspace should be 2-D.')
@@ -136,24 +158,21 @@ class CoarseGridCorrection(Preconditioner):
 
         n, k = subspace.shape
 
-        q, r = scipy.linalg.qr(subspace, mode='economic')
-        s = scipy.linalg.svd(r, compute_uv=False)
-        rank = numpy.sum(s * (1 / s[0]) > 1e-6)
+        if not self.is_sparse:
+            q, r = scipy.linalg.qr(subspace, mode='economic')
+            s = scipy.linalg.svd(r, compute_uv=False)
+            rank = numpy.sum(s * (1 / s[0]) > rank_tol)
+            self._subspace = q[:, :rank]
+        else:
+            rank = k
+            self._subspace = subspace
 
-        self._subspace = q[:, :rank]
         self._reduced_lin_op = self._subspace.T.dot(lin_op.dot(self._subspace))
 
-        try:
-            L = scipy.linalg.cholesky(self._reduced_lin_op, lower=True)
-            self._l = L
-            self._u = L.T
-            self._p = None
-
-        except numpy.linalg.LinAlgError:
-            P, L, U = scipy.linalg.lu(self._reduced_lin_op)
-            self._l = L
-            self._u = U
-            self._p = P
+        if self.is_sparse:
+            self._splu = scipy.sparse.linalg.splu(self._reduced_lin_op)
+        else:
+            self._p, self._l, self._u = scipy.linalg.lu(self._reduced_lin_op)
 
         self.building_cost = self._get_building_cost(lin_op.apply_cost, n, k, rank)
         self.size = self._matvec_cost()
@@ -171,22 +190,22 @@ class CoarseGridCorrection(Preconditioner):
         return cost
 
     def _matvec_cost(self):
-        cost = 2*self._subspace.size            # S^T * x
-        cost += 2*self._subspace.shape[1]**2    # P.T * x
-        cost += 2*self._subspace.shape[1]**2    # L^-1 * x
-        cost += 2*self._subspace.shape[1]**2    # U^-1 * x
-        cost = 2*self._subspace.size            # S * x
+        cost = 2 * self._subspace.size          # S^T * x
+        cost += 2 * self._subspace.shape[1]**2  # P^T * x
+        cost += 2 * self._subspace.shape[1]**2  # L^-1 * x
+        cost += 2 * self._subspace.shape[1]**2  # U^-1 * x
+        cost += 2 * self._subspace.size         # S * x
         return cost
 
     def _apply(self, x):
-
         y = self._subspace.T.dot(x)
 
-        if self._p is not None:
+        if not self.is_sparse:
             y = self._p.T.dot(y)
-
-        y = scipy.linalg.solve_triangular(self._l, y, lower=True)
-        y = scipy.linalg.solve_triangular(self._u, y)
+            y = scipy.linalg.solve_triangular(self._l, y, lower=True)
+            y = scipy.linalg.solve_triangular(self._u, y)
+        else:
+            y = self._splu.solve(y)
 
         y = self._subspace.dot(y)
 
@@ -196,37 +215,21 @@ class CoarseGridCorrection(Preconditioner):
 class LimitedMemoryPreconditioner(Preconditioner):
 
     def __init__(self, lin_op, subspace, M=None):
-
         if M is not None and not isinstance(M, Preconditioner):
             raise PreconditionerError('LMP first level preconditioner must be a Preconditioner.')
+
+        _, k = subspace.shape
 
         M = IdentityPreconditioner(lin_op) if M is None else M
         Q = CoarseGridCorrection(lin_op, subspace)
 
         dtype = numpy.find_common_type([Q.dtype, M.dtype], [])
-        apply_cost = (Q * M * Q).apply_cost
+
+        if scipy.sparse.isspmatrix(subspace):
+            apply_cost = 8*subspace.size + 4*lin_op.apply_cost + 2*k*(k+1)
+        else:
+            apply_cost = 8 * subspace.size
 
         super().__init__(lin_op.shape, dtype, apply_cost, lin_op)
 
         self._apply = (Q * M * Q).apply
-
-
-if __name__ == "__main__":
-
-    import scipy.sparse
-
-    from utils import norm
-    from linear_operator import SelfAdjointMatrix
-
-    size = 200
-    sub_size = 50
-
-    A_ = scipy.sparse.rand(size, size, density=1e-3)
-    A_ = A_.T + A_ + scipy.sparse.diags([i**1.125 for i in range(size)])
-    A_ = SelfAdjointMatrix(A_)
-
-    S = numpy.random.rand(size, sub_size)
-
-    H = LimitedMemoryPreconditioner(A_, S)
-    print(H.apply_cost)
-    print(norm(H.dot(A_.dot(S)) - S))
