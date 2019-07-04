@@ -141,12 +141,32 @@ class IdentityPreconditioner(Preconditioner):
         return x
 
 
+class DiagonalPreconditioner(Preconditioner):
+
+    def __init__(self, lin_op):
+
+        n, _ = lin_op.shape
+
+        if scipy.sparse.issparse(lin_op.A):
+            diag = lin_op.A.diagonal()
+        else:
+            diag = numpy.diag(lin_op.A)
+
+        self._diag = scipy.sparse.diags(1 / diag)
+
+        super().__init__(lin_op.shape, lin_op.dtype, n, lin_op)
+
+    def _apply(self, x):
+        return self._diag.dot(x)
+
+
 class CoarseGridCorrection(Preconditioner):
 
-    def __init__(self, lin_op, subspace, rank_tol=1e-7):
-        self.is_sparse = scipy.sparse.isspmatrix(subspace)
+    def __init__(self, lin_op, subspace, rank_tol=1e-10):
 
-        if not isinstance(subspace, (numpy.ndarray, numpy.matrix)) and not self.is_sparse:
+        self.sparse_subspace = scipy.sparse.isspmatrix(subspace)
+
+        if not isinstance(subspace, (numpy.ndarray, numpy.matrix)) and not self.sparse_subspace:
             raise PreconditionerError('CoarseGridCorrection projection subspace should be either a'
                                       'numpy.ndarray or numpy.matrix or a sparse matrix.')
 
@@ -158,7 +178,7 @@ class CoarseGridCorrection(Preconditioner):
 
         n, k = subspace.shape
 
-        if not self.is_sparse:
+        if not self.sparse_subspace:
             q, r = scipy.linalg.qr(subspace, mode='economic')
             s = scipy.linalg.svd(r, compute_uv=False)
             rank = numpy.sum(s * (1 / s[0]) > rank_tol)
@@ -169,10 +189,11 @@ class CoarseGridCorrection(Preconditioner):
 
         self._reduced_lin_op = self._subspace.T.dot(lin_op.dot(self._subspace))
 
-        if self.is_sparse:
-            self._splu = scipy.sparse.linalg.splu(self._reduced_lin_op)
-        else:
-            self._p, self._l, self._u = scipy.linalg.lu(self._reduced_lin_op)
+        if self.sparse_subspace:
+            self._reduced_lin_op = self._reduced_lin_op.todense()
+
+        self._p, self._l, self._u = scipy.linalg.lu(self._reduced_lin_op)
+        self._p = scipy.sparse.csc_matrix(self._p)
 
         self.building_cost = self._get_building_cost(lin_op.apply_cost, n, k, rank)
         self.size = self._matvec_cost()
@@ -183,32 +204,27 @@ class CoarseGridCorrection(Preconditioner):
 
     @staticmethod
     def _get_building_cost(lin_op_size, n, k, rank):
-        cost = 2*n*k**2 + 2*k**3            # R-SVD
-        cost += 2*k*lin_op_size + 2*n*k**2  # A_m = S^T*A*S
-        cost += 2/3*rank**3                 # PLU
-
+        cost = 2 * n * k**2 + 2 * k**3              # R-SVD
+        cost += 2 * k * lin_op_size + 2 * n * k**2  # A_m = S^T*A*S
+        cost += 2 / 3 * rank**3                     # PLU
         return cost
 
     def _matvec_cost(self):
+        _, k = self._subspace.shape
         cost = 2 * self._subspace.size          # S^T * x
-        cost += 2 * self._subspace.shape[1]**2  # P^T * x
-        cost += 2 * self._subspace.shape[1]**2  # L^-1 * x
-        cost += 2 * self._subspace.shape[1]**2  # U^-1 * x
+        cost += 2 * k * (k + 1)                 # L^-1 * x
+        cost += 2 * k * (k + 1)                 # U^-1 * x
         cost += 2 * self._subspace.size         # S * x
         return cost
 
     def _apply(self, x):
         y = self._subspace.T.dot(x)
 
-        if not self.is_sparse:
-            y = self._p.T.dot(y)
-            y = scipy.linalg.solve_triangular(self._l, y, lower=True)
-            y = scipy.linalg.solve_triangular(self._u, y)
-        else:
-            y = self._splu.solve(y)
+        y = self._p.T.dot(y)
+        y = scipy.linalg.solve_triangular(self._l, y, lower=True)
+        y = scipy.linalg.solve_triangular(self._u, y)
 
         y = self._subspace.dot(y)
-
         return y
 
 
@@ -228,7 +244,7 @@ class LimitedMemoryPreconditioner(Preconditioner):
         if scipy.sparse.isspmatrix(subspace):
             apply_cost = 8*subspace.size + 4*lin_op.apply_cost + 2*k*(k+1)
         else:
-            apply_cost = 8 * subspace.size
+            apply_cost = 8*subspace.size
 
         super().__init__(lin_op.shape, dtype, apply_cost, lin_op)
 
