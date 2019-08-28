@@ -8,6 +8,8 @@ Created on August 20, 2019 at 09:09.
 
 Description:
 """
+
+import os
 import numpy
 import argparse
 
@@ -23,6 +25,8 @@ COLORS = ['tab:blue',
           'tab:gray',
           'tab:olive',
           'tab:cyan']
+
+MARKER = ['', 'o', 's', '^']
 
 # Parse command line argument
 parser = argparse.ArgumentParser()
@@ -42,22 +46,23 @@ comparison = args.comparison
 reports_sets = dict()
 
 # Pre-processing the files path provided regarding the comparison choice
-for report_path in args.reports:
-    report_name = report_path.split('/')[-1]
+for REPORT_PATH in args.reports:
+    _, report_name = os.path.split(REPORT_PATH)
+
     problem_name = report_name.split('_')[0]
     sampling = report_name.split('_')[-1]
 
     # Sort the reports according to the comparison criterion provided
     if comparison == 'spl':
         if problem_name not in reports_sets.keys():
-            reports_sets[problem_name] = [report_path]
+            reports_sets[problem_name] = [REPORT_PATH]
         else:
-            reports_sets[problem_name].append(report_path)
+            reports_sets[problem_name].append(REPORT_PATH)
     else:
         if sampling not in reports_sets.keys():
-            reports_sets[sampling] = [report_path]
+            reports_sets[sampling] = [REPORT_PATH]
         else:
-            reports_sets[sampling].append(report_path)
+            reports_sets[sampling].append(REPORT_PATH)
 
 # Go through all the reports
 for key, reports_paths in reports_sets.items():
@@ -71,16 +76,18 @@ for key, reports_paths in reports_sets.items():
         plot_title = 'Operators preconditioned by ' + key + ' sampled subspaces.'
 
     # Browse through the reports file names in the report set
-    for k, report_path in enumerate(reports_paths):
+    for k, REPORT_PATH in enumerate(reports_paths):
+        _, report_name = os.path.split(REPORT_PATH)
+
         if comparison == 'spl':
-            label = report_path.split('/')[-1].split('_')[-1]
+            label = report_name.split('_')[-1]
         else:
-            label = report_path.split('/')[-1].split('_')[0]
+            label = report_name.split('_')[0]
 
         subspace_sizes, means, stdevs, minima, maxima = [], [], [], [], []
 
         # Read and store the data contained in reports files
-        with open(report_path, 'r') as report:
+        with open(REPORT_PATH, 'r') as report:
             # Get the list of text lines
             content = report.readlines()
 
@@ -113,7 +120,15 @@ for key, reports_paths in reports_sets.items():
         upper = [means[i] + stdevs[i] for i in range(len(means))]
 
         # Add plot to the current figure
-        pyplot.plot(subspace_sizes, means, color=COLORS[k % len(COLORS)], label=label)
+        pyplot.plot(subspace_sizes,
+                    means,
+                    linestyle='-',
+                    mec='k',
+                    ms=5,
+                    marker=MARKER[(k // len(COLORS)) % len(MARKER)],
+                    color=COLORS[k % len(COLORS)],
+                    label=label)
+
         pyplot.fill_between(subspace_sizes, lower, upper, color=COLORS[k % len(COLORS)], alpha=0.2)
         pyplot.plot(subspace_sizes, minima, color=COLORS[k % len(COLORS)], marker='+', lw=0)
 
