@@ -157,15 +157,17 @@ def initialize_report(subspace_sizes, setup):
     return report_name
 
 
-def extract(file_path, hand_val=True):
+def extract(OPERATOR_FILE_PATH, hand_val=True):
+    OPERATOR_FILE_PATH, _ = os.path.splitext(OPERATOR_FILE_PATH)
+    FOLDER_PATH, FILE_NAME = os.path.split(OPERATOR_FILE_PATH)
 
     operator = dict()
 
-    operator['name'] = file_path.split('/')[-1][:-4]
+    operator['name'] = FILE_NAME
     operator['symmetric'] = True
     operator['def_pos'] = True
 
-    obj = scipy.io.loadmat(file_path)['Problem']
+    obj = scipy.io.loadmat(OPERATOR_FILE_PATH)['Problem']
 
     while len(obj) == 1:
         obj = obj[0]
@@ -185,7 +187,8 @@ def extract(file_path, hand_val=True):
             operator['source'] = entree.capitalize()
 
     try:
-        svd = scipy.io.loadmat('operators/' + operator['name'] + '_SVD')
+        SVD_FILE_PATH = os.path.join(FOLDER_PATH, FILE_NAME + '_SVD')
+        svd = scipy.io.loadmat(SVD_FILE_PATH)
 
         while len(svd) == 1:
             svd = svd[0]
@@ -210,7 +213,7 @@ def extract(file_path, hand_val=True):
         for key, val in operator.items():
             print('{}: {}'.format(key, val))
 
-        valid = input('Satisfying content ? [y/n]')
+        valid = input('Satisfying content ? [y/n] ')
 
         if valid != 'y':
             raise FileExtractionError
@@ -222,10 +225,10 @@ def extract(file_path, hand_val=True):
         p.dump(operator)
 
     try:
-        os.remove('operators/' + operator['name'] + '.mat')
-        os.remove('operators/' + operator['name'] + '_SVD.mat')
+        os.remove(OPERATOR_FILE_PATH + '.mat')
+        os.remove(SVD_FILE_PATH + '.mat')
     except FileNotFoundError:
-        os.remove('operators/' + operator['name'] + '.mat')
+        os.remove(OPERATOR_FILE_PATH + '.mat')
 
 
 def convert_to_col(X):
