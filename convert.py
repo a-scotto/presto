@@ -26,15 +26,15 @@ parser.add_argument('-f', '--folder',
 args = parser.parse_args()
 
 # Filter the content of the folder to select only the .mat files
-operators_paths = fnmatch.filter(os.listdir(args.folder), '*.mat')
+operators_files = fnmatch.filter(os.listdir(args.folder), '*.mat')
 
-for operators_file in operators_paths:
+for operator_file_name in operators_files:
 
     # Skip .mat files containing SVD decomposition
-    if 'SVD' in operators_file:
+    if operator_file_name.endswith('_SVD.mat'):
         continue
 
-    operator_path = os.path.join(OPERATORS_PATH, operators_file)
+    operator_path = os.path.join(args.folder, operator_file_name)
 
     # Extract content
     print('Extracting from {}... '.format(operator_path), end='')
