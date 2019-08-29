@@ -49,21 +49,16 @@ class LinearSystem(object):
         if lhs.shape[0] != lin_op.shape[1]:
             raise LinearSystemError('Linear map and left-hand side shapes do not match.')
 
-        self.lhs, self.scaling = self._normalize_lhs(lhs)
+        self.lhs = lhs
+        self.scaling = numpy.linalg.norm(lhs)
         self.x_sol = x_sol
 
         self.block = False if self.lhs.shape[1] == 1 else True
         self.shape = self.lin_op.shape
         self.dtype = numpy.find_common_type([self.lin_op.dtype, self.lhs.dtype], [])
 
-    @staticmethod
-    def _normalize_lhs(lhs):
-        scaling = numpy.linalg.norm(lhs, axis=0)
-        lhs = lhs / scaling
-        return lhs, scaling
-
     def get_residual(self, x):
-        return self.lin_op.dot(x) - self.lhs * self.scaling
+        return self.lhs - self.lin_op.dot(x)
 
     def __repr__(self):
         _repr = 'Linear system of shape {} with left-hand side of shape {}.'\
@@ -260,8 +255,8 @@ class _SolverMonitor(object):
 
     def report(self, solver_name, initial_res, final_res):
         string = '{:25}: run of {:4} iteration(s)  |  '.format(solver_name, self.n_it)
-        string += 'Absolute 2-norm residual = {:1.4e}  |  '.format(final_res)
-        string += 'Relative 2-norm residual = {:1.4e}'.format(final_res / initial_res)
+        string += 'Final absolute 2-norm residual = {:1.4e}  |  '.format(final_res)
+        string += 'Relative 2-norm residual reduction = {:1.4e}'.format(final_res / initial_res)
         return string
 
 
@@ -292,7 +287,8 @@ class ConjugateGradient(_LinearSolver):
         operator_cost = self.lin_sys.lin_op.apply_cost
         n, _ = self.lin_sys.lhs.shape
 
-        r = - self.lin_sys.get_residual(self.x_0) / self.lin_sys.scaling
+        r = self.lin_sys.get_residual(self.x_0) / self.lin_sys.scaling
+
         z = self.M_i.apply(r)
         p = numpy.copy(z)
         auxiliaries = [z, p, r]
@@ -308,7 +304,10 @@ class ConjugateGradient(_LinearSolver):
 
     def _finalize(self):
         residues, cost = self.monitor.get_history()
+        residues *= self.lin_sys.scaling
+
         z, p, r = self.monitor.get_auxiliaries()
+
         report = self.monitor.report('Conjugate Gradient', residues[0], residues[-1])
 
         arnoldi = None
@@ -330,8 +329,6 @@ class ConjugateGradient(_LinearSolver):
                 t_sub_diag.append(float(-beta_k[i] * d_k[i] / residues[i] / residues[i + 1]))
 
             arnoldi = (t_diag, t_sub_diag)
-
-        residues *= self.lin_sys.scaling
 
         output = {'report': report,
                   'x': self.x_0 + self.x * self.lin_sys.scaling,
@@ -363,7 +360,6 @@ class ConjugateGradient(_LinearSolver):
 
     def run(self, verbose=False):
         for k in range(self.maxiter):
-
             z, p, r = self.monitor.get_previous()
 
             q_k = self.lin_sys.lin_op.dot(p)
@@ -421,7 +417,7 @@ class BlockConjugateGradient(_LinearSolver):
         operator_cost = self.lin_sys.lin_op.apply_cost
         n, k = self.lin_sys.lhs.shape
 
-        R = - self.lin_sys.get_residual(self.x_0) / self.lin_sys.scaling
+        R = self.lin_sys.get_residual(self.x_0) / self.lin_sys.scaling
         r = scipy.linalg.qr(R, mode='r')[0]
         s = scipy.linalg.svd(r, compute_uv=False)
         rank = numpy.sum(s * (1 / s[0]) > self.rank_tol)
@@ -482,7 +478,6 @@ class BlockConjugateGradient(_LinearSolver):
 
     def run(self, verbose=False):
         for k in range(self.maxiter):
-
             Z, P, R = self.monitor.get_previous()
 
             Q_k = self.lin_sys.lin_op.dot(P)
