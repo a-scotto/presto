@@ -77,6 +77,9 @@ for key, reports_paths in reports_sets.items():
 
     # Browse through the reports file names in the report set
     for j, REPORT_PATH in enumerate(reports_paths):
+        if 'worse' in REPORT_PATH or 'best' in REPORT_PATH:
+            continue
+
         _, report_name = os.path.split(REPORT_PATH)
 
         if comparison == 'spl':
@@ -143,7 +146,7 @@ for key, reports_paths in reports_sets.items():
         deterministic_cost = 8 * size * det_sizes
 
         # Add plot to the current figure
-        pyplot.plot(stochastic_cost,
+        pyplot.plot(sto_sizes / size,
                     means,
                     linestyle='-',
                     mec='k',
@@ -152,9 +155,9 @@ for key, reports_paths in reports_sets.items():
                     color=COLORS[j % len(COLORS)],
                     label=label)
 
-        pyplot.fill_between(stochastic_cost, lower, upper, color=COLORS[j % len(COLORS)], alpha=0.2)
-        pyplot.plot(stochastic_cost, minima, color=COLORS[j % len(COLORS)], marker='+', lw=0)
-        pyplot.plot(deterministic_cost, det_perfs, color=COLORS[j % len(COLORS)], ls='--')
+        pyplot.fill_between(sto_sizes / size, lower, upper, color=COLORS[j % len(COLORS)], alpha=0.2)
+        pyplot.plot(sto_sizes / size, minima, color=COLORS[j % len(COLORS)], marker='+', lw=0)
+        pyplot.plot(sto_sizes / size, det_perfs, color=COLORS[j % len(COLORS)], ls='--')
 
     # Add the legend, title, and axis titles
     pyplot.legend()
