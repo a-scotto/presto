@@ -79,7 +79,6 @@ for operator_path in setups.keys():
             subspace = numpy.hstack(cg['p'][:k_0])
             lmp_det = LimitedMemoryPreconditioner(A, subspace, M=D)
             pcg = ConjugateGradient(lin_sys, x_0=None, M=lmp_det).run()
-            print(pcg['n_it'])
 
             deterministic_report = str(k_0) + '_' + str(pcg['n_it'] / n_iterations_ref)[:4]
 
