@@ -76,7 +76,7 @@ for key, reports_paths in reports_sets.items():
         plot_title = 'Operators preconditioned by ' + key + ' sampled subspaces.'
 
     # Browse through the reports file names in the report set
-    for k, REPORT_PATH in enumerate(reports_paths):
+    for j, REPORT_PATH in enumerate(reports_paths):
         _, report_name = os.path.split(REPORT_PATH)
 
         if comparison == 'spl':
@@ -84,7 +84,13 @@ for key, reports_paths in reports_sets.items():
         else:
             label = report_name.split('_')[0]
 
-        subspace_sizes, means, stdevs, minima, maxima = [], [], [], [], []
+        det_perfs = list()
+        sto_sizes = list()
+        det_sizes = list()
+        means = list()
+        stdevs = list()
+        minima = list()
+        maxima = list()
 
         # Read and store the data contained in reports files
         with open(REPORT_PATH, 'r') as report:
@@ -96,49 +102,67 @@ for key, reports_paths in reports_sets.items():
                 if data[0] == '>':
                     pass
 
-                # Read metadata
-                elif data[0] == '~':
+                # Read operator metadata
+                elif '~operator_metadata' in data:
                     metadata = data.split('#')[1:]
                     size = int(metadata[0])
                     nnz = int(metadata[1])
                     cond = float(metadata[2])
                     source = metadata[3]
 
+                # Read benchmark setup metadata
+                elif '~benchmark_metadata' in data:
+                    metadata = data.split('#')[1:]
+                    reference_run = int(metadata[0])
+                    d = float(metadata[1])
+
                 # Read data
                 else:
-                    p, data = data.split('_')
-                    perf_ratios = data.split(',')
-                    perf_ratios = list(map(lambda x: float(x), perf_ratios))
+                    det_data, sto_data = data.split('#')
+                    k_0, det_perf = det_data.split('_')
+                    k, sto_perf = sto_data.split('_')
 
-                    subspace_sizes.append(int(p) / size)
-                    means.append(numpy.mean(perf_ratios))
-                    stdevs.append(numpy.std(perf_ratios))
-                    minima.append(min(perf_ratios))
-                    maxima.append(max(perf_ratios))
+                    sto_perf = list(map(lambda x: float(x), sto_perf.split(',')))
+
+                    sto_sizes.append(int(k))
+                    det_sizes.append(int(k_0))
+
+                    det_perfs.append(float(det_perf))
+                    means.append(numpy.mean(sto_perf))
+                    stdevs.append(numpy.std(sto_perf))
+                    minima.append(min(sto_perf))
+                    maxima.append(max(sto_perf))
 
         lower = [means[i] - stdevs[i] for i in range(len(means))]
         upper = [means[i] + stdevs[i] for i in range(len(means))]
 
+        sto_sizes = numpy.asarray(sto_sizes)
+        det_sizes = numpy.asarray(det_sizes)
+
+        stochastic_cost = 4 * nnz + 6 * (sto_sizes * (1 - d) + size) + sto_sizes**2
+        deterministic_cost = 8 * size * det_sizes
+
         # Add plot to the current figure
-        pyplot.plot(subspace_sizes,
+        pyplot.plot(stochastic_cost,
                     means,
                     linestyle='-',
                     mec='k',
                     ms=5,
-                    marker=MARKER[(k // len(COLORS)) % len(MARKER)],
-                    color=COLORS[k % len(COLORS)],
+                    marker=MARKER[(j // len(COLORS)) % len(MARKER)],
+                    color=COLORS[j % len(COLORS)],
                     label=label)
 
-        pyplot.fill_between(subspace_sizes, lower, upper, color=COLORS[k % len(COLORS)], alpha=0.2)
-        pyplot.plot(subspace_sizes, minima, color=COLORS[k % len(COLORS)], marker='+', lw=0)
+        pyplot.fill_between(stochastic_cost, lower, upper, color=COLORS[j % len(COLORS)], alpha=0.2)
+        pyplot.plot(stochastic_cost, minima, color=COLORS[j % len(COLORS)], marker='+', lw=0)
+        pyplot.plot(deterministic_cost, det_perfs, color=COLORS[j % len(COLORS)], ls='--')
 
     # Add the legend, title, and axis titles
     pyplot.legend()
     pyplot.title(plot_title)
     pyplot.xlabel('Ratios of subspace size and problem size k / n')
-    pyplot.ylabel('Ratios of iterations between CG and PCG')
+    pyplot.ylabel('PCG iterations compared to ' + str(reference_run))
 
-    pyplot.xlim(subspace_sizes[0], subspace_sizes[-1])
+    # pyplot.xlim(subspace_sizes[0], subspace_sizes[-1])
     pyplot.ylim(bottom=0.)
 
 pyplot.show()
