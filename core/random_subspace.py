@@ -51,11 +51,11 @@ class RandomSubspaceFactory(object):
         else:
             raise ValueError('Sampling strategy unknown.')
 
-    def _binary_sparse(self, d=1.):
+    def _binary_sparse(self, d):
         n, k = self.shape
         subspace = scipy.sparse.lil_matrix(self.shape)
 
-        r = max(int(n * d), k)
+        r = int(k + (n - k) * d)
         rows = [i % n for i in range(r)]
         random.shuffle(rows)
 
@@ -64,11 +64,11 @@ class RandomSubspaceFactory(object):
 
         return subspace.tocsc()
 
-    def _gaussian_sparse(self, d=1.):
+    def _gaussian_sparse(self, d):
         n, k = self.shape
         subspace = scipy.sparse.lil_matrix(self.shape)
 
-        r = max(int(n * d), k)
+        r = int(k + (n - k) * d)
         rows = [i % n for i in range(r)]
         random.shuffle(rows)
 
