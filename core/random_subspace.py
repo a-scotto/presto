@@ -56,12 +56,11 @@ class RandomSubspaceFactory(object):
         subspace = scipy.sparse.lil_matrix(self.shape)
 
         r = max(int(n * d), k)
-
         rows = [i % n for i in range(r)]
         random.shuffle(rows)
 
         for i in range(r):
-            subspace[rows[i], i % k] = (2 * numpy.random.randint(0, 2) - 1) / numpy.sqrt(d)
+            subspace[rows[i], i % k] = (2 * numpy.random.randint(0, 2) - 1) / numpy.sqrt(r / k)
 
         return subspace.tocsc()
 
@@ -70,7 +69,6 @@ class RandomSubspaceFactory(object):
         subspace = scipy.sparse.lil_matrix(self.shape)
 
         r = max(int(n * d), k)
-
         rows = [i % n for i in range(r)]
         random.shuffle(rows)
 
