@@ -12,6 +12,7 @@ Description:
 import tqdm
 import numpy
 import argparse
+import scipy.sparse
 
 from core.linear_operator import SelfAdjointMatrix
 from core.random_subspace import RandomSubspaceFactory
@@ -104,13 +105,13 @@ for operator_path in setups.keys():
 
                 if k == subspace_sizes[-1]:
                     if pcg_score > worse:
-                        numpy.savetxt('reports/' + report_file_name + '_worse_' + str(k),
-                                      subspace.todense())
+                        scipy.sparse.save_npz('reports/' + report_file_name + '_worse_' + str(k),
+                                              subspace)
                         worse = pcg_score
 
                     elif pcg_score < best:
-                        numpy.savetxt('reports/' + report_file_name + '_best_' + str(k),
-                                      subspace.todense())
+                        scipy.sparse.save_npz('reports/' + report_file_name + '_best_' + str(k),
+                                              subspace)
                         best = pcg_score
 
             # Remove last coma from report line
