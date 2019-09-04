@@ -410,7 +410,10 @@ class BlockConjugateGradient(_LinearSolver):
 
         super().__init__(lin_sys, x_0, M, tol, lin_sys.shape[0])
 
-        if not isinstance(self.M_i, Preconditioner):
+        if isinstance(self.M_i, list) and len(self.M_i != lin_sys.lhs.shape[1]):
+            raise LinearSolverError('There must be as many preconditioners as left-hand sides.')
+
+        elif not isinstance(self.M_i, Preconditioner):
             raise LinearSolverError('Block Conjugate Gradient can handle only one preconditioner.')
 
     def _initialize(self):
@@ -427,7 +430,7 @@ class BlockConjugateGradient(_LinearSolver):
         P = numpy.copy(Z)
         auxiliaries = [Z, P, R]
 
-        residue = numpy.linalg.norm(R[:, :rank])
+        residue = max(numpy.linalg.norm(R[:, :rank], axis=0))
         cost = 2*operator_cost*k + n*k + 2 * self.lin_sys.lhs.size
         history = [residue, cost, rank, eps_rank]
 
@@ -457,18 +460,19 @@ class BlockConjugateGradient(_LinearSolver):
 
         return output
 
-    def _iteration_cost(self, r):
+    def _iteration_cost(self, alpha):
         operator_cost = self.lin_sys.lin_op.apply_cost
         n, k = self.lin_sys.lhs.shape
+        r, c = alpha.shape
         total_cost = 0
 
         total_cost += 2 * operator_cost * r     # Q_k
         total_cost += 2 * n * r**2              # delta
-        total_cost += 4*k*r**2 + 22*k**3        # SVD of delta
+        total_cost += 4*r*r**2 + 22*r**3        # SVD of delta
         total_cost += r                         # s_inv
-        total_cost += 2*(r*n*k + 3*r*r*k)       # alpha
-        total_cost += n*k + 2*r*n*k             # self.x
-        total_cost += n*k + 2*r*n*k             # R_k
+        total_cost += 2*(r*n*c + 3*r*r*c)       # alpha
+        total_cost += n*c + 2*r*n*c             # self.x
+        total_cost += n*c + 2*r*n*c             # R_k
         total_cost += 2*n*r**2                  # residue
         total_cost += self.M_i.apply_cost       # Z_k
         total_cost += 2*(r*n*r + 3*r*r*k)       # beta
@@ -478,36 +482,48 @@ class BlockConjugateGradient(_LinearSolver):
 
     def run(self, verbose=False):
         for k in range(self.maxiter):
+            # Retrieve last iterates quantities
             Z, P, R = self.monitor.get_previous()
 
             Q_k = self.lin_sys.lin_op.dot(P)
 
+            # SVD decomposition of P^T*A*P
             delta = P.T.dot(Q_k)
-            u, s, v = numpy.linalg.svd(delta)
-            rank = numpy.sum(s * (1 / s[0]) > self.rank_tol)
-            eps_rank = s[-1] / s[0]
+            u, sigma, v = numpy.linalg.svd(delta)
 
-            s_inv = numpy.zeros_like(s)
-            s_inv[:rank] = 1 / s[:rank]
+            # Determination of numerical rank with given tolerance
+            rank = numpy.sum((sigma > sigma[0] * self.rank_tol))
 
-            alpha = v.T @ numpy.diag(s_inv) @ u.T @ Z.T.dot(R)
-            self.x += P.dot(alpha)
+            # Pseudo inverse singular values
+            sigma_inv = numpy.zeros_like(sigma)
+            sigma_inv[:rank] = 1 / sigma[:rank]
 
-            R -= Q_k.dot(alpha)
+            # Spot not yet converged columns to determine the remaining active ones
+            residues = numpy.linalg.norm(R, axis=0)
+            active_cols = residues > self.tol
 
-            residue = numpy.linalg.norm(R[:, :rank])
-            self.total_cost += self._iteration_cost(rank)
+            # Computation of A-conjugation corrector alpha
+            alpha = v.T @ numpy.diag(sigma_inv) @ u.T @ Z.T.dot(R[:, active_cols])
+
+            # Update of iterate
+            self.x[:, active_cols] += P.dot(alpha)
+
+            R[:, active_cols] -= Q_k.dot(alpha)
+
+            residue = max(residues)
+
+            self.total_cost += self._iteration_cost(alpha)
 
             if residue < self.tol:
-                self.monitor.update([residue, self.total_cost, rank, eps_rank], [])
+                self.monitor.update([residue, self.total_cost, rank, 1], [])
                 break
 
-            Z = self.M_i.apply(R[:, :rank])
+            Z = self.M_i.apply(R[:, active_cols])
 
-            beta = - v.T @ numpy.diag(s_inv) @ u.T @ Q_k.T.dot(Z)
+            beta = - v.T @ numpy.diag(sigma_inv) @ u.T @ Q_k.T.dot(Z)
             P = Z + P.dot(beta)
 
-            self.monitor.update([residue, self.total_cost, rank, eps_rank], [Z, P, R])
+            self.monitor.update([residue, self.total_cost, rank, 1], [Z, P, R])
 
         output = self._finalize()
 
