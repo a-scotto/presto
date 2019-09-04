@@ -29,59 +29,96 @@ args = parser.parse_args()
 # Extract the setups from benchmark setup file provided
 setups = read_setup(OPERATOR_ROOT_PATH, args.setup)
 
-for setup in setups:
+for operator_path in setups.keys():
     # Load operator
-    operator = load_operator(setup['operator'])
+    operator = load_operator(operator_path)
+    n = operator['rank']
 
     # Normalize to enforce that 1 lie within the spectrum of A
-    u = numpy.random.randn(operator['rank'], 1)
+    u = numpy.random.randn(n, 1)
     gamma = float(u.T.dot(u)) / float(u.T.dot(operator['operator'].dot(u)))
 
     # Instantiate operator and first-level preconditioning
     A = SelfAdjointMatrix(gamma * operator['operator'], def_pos=True)
     D = DiagonalPreconditioner(A)
 
-    # Define the list of subspaces size to be tested regarding the setup parameters
-    step = (operator['rank'] // 10) // setup['n_samples'] + 1
-    subspace_sizes = [step * (i + 1) for i in range(setup['n_samples'])]
+    # Set a CG run of reference
+    lhs = list()
+    n_iterations = list()
 
-    # Initialize the report text file
-    report_file_name = initialize_report(subspace_sizes, setup)
+    # Run the CG with several left-hand sides
+    for i in range(50):
+        lhs.append(A.dot(numpy.random.randn(A.shape[0], 1)))
+        lin_sys = LinearSystem(A, lhs[-1])
 
-    # Test all the subspace sizes
-    for p in tqdm.tqdm(subspace_sizes):
-        REPORT_LINE = str(p) + '_'
-        factory = RandomSubspaceFactory((operator['rank'], p))
+        cg = ConjugateGradient(lin_sys, x_0=None, M=D).run()
+        n_iterations.append(cg['n_it'])
 
-        # Run the number of tests specified
-        for s in range(setup['n_tests']):
-            # Left-hand side and initial guess random generation
-            b = gamma * numpy.random.randn(A.shape[0], 1)
-            x_0 = numpy.random.randn(A.shape[0], 1)
+    # Get the LHS close to the average run
+    average_run = int(numpy.argmin(numpy.asarray(n_iterations) - numpy.mean(n_iterations)))
+    lin_sys = LinearSystem(A, lhs[average_run])
+    n_iterations_ref = n_iterations[average_run]
+    cg = ConjugateGradient(lin_sys, x_0=None, M=D, buffer=n, tol=1e-8).run()
 
-            # Create the linear system object
-            lin_sys = LinearSystem(A, b)
+    for setup in setups[operator_path]:
+        # Define the list of subspaces size to be tested regarding the setup parameters
+        step = int(n * setup['ratio_max']) // setup['n_subspaces'] + 1
+        subspace_sizes = [step * (i + 1) for i in range(setup['n_subspaces'])]
+        setup['reference'] = n_iterations_ref
 
-            # Run the Conjugate Gradient to obtain the reference run
-            cg = ConjugateGradient(lin_sys, x_0=x_0, M=D).run()
+        # Initialize the report text file
+        report_file_name = initialize_report(subspace_sizes, operator_path, setup)
 
-            # Generate the subspace from the factory
-            subspace = factory.generate(setup['sampling'], setup['args'])
+        # Test all the subspace sizes
+        for k in tqdm.tqdm(subspace_sizes):
+            factory = RandomSubspaceFactory((n, k))
 
-            # Build the LMP from the subspace generated
-            lmp = LimitedMemoryPreconditioner(A, subspace, M=D)
+            # Run of the PCG with deterministic LMP
+            p = int(k + (n - k) * setup['args'])
+            k_0 = (4*operator['non_zeros'] + 6*p + p**2) // (8 * n) + 1
+            subspace = numpy.hstack(cg['p'][:k_0])
+            lmp_det = LimitedMemoryPreconditioner(A, subspace, M=D)
+            pcg = ConjugateGradient(lin_sys, x_0=None, M=lmp_det).run()
+            print(pcg['n_it'])
 
-            # Run the Preconditioned Conjugate Gradient
-            pcg = ConjugateGradient(lin_sys, x_0=x_0, M=lmp).run()
+            deterministic_report = str(k_0) + '_' + str(pcg['n_it'] / n_iterations_ref)[:4]
 
-            # Add result to the report data line
-            REPORT_LINE += str(pcg['n_it'] / cg['n_it'])[:6] + ','
+            REPORT_LINE = deterministic_report + '#' + str(k) + '_'
 
-        # Remove last coma from report line
-        REPORT_LINE = REPORT_LINE[:-1]
+            best = numpy.Inf
+            worse = 0
 
-        # Write data line in report file
-        with open('reports/' + report_file_name, 'a') as report_file:
-            report_file.write(REPORT_LINE + '\n')
+            # Run the number of tests specified
+            for i in range(setup['n_tests']):
+                # Generate the subspace from the factory
+                subspace = factory.generate(setup['sampling'], setup['args'])
 
-    print()
+                # Build the LMP from the subspace generated
+                lmp = LimitedMemoryPreconditioner(A, subspace, M=D)
+
+                # Run the Preconditioned Conjugate Gradient
+                pcg = ConjugateGradient(lin_sys, x_0=None, M=lmp).run()
+                pcg_score = pcg['n_it'] / n_iterations_ref
+
+                # Add result to the report data line
+                REPORT_LINE += str(pcg_score)[:6] + ','
+
+                if k == subspace_sizes[-1]:
+                    if pcg_score > worse:
+                        numpy.savetxt('reports/' + report_file_name + '_worse_' + str(k),
+                                      subspace.todense())
+                        worse = pcg_score
+
+                    elif pcg_score < best:
+                        numpy.savetxt('reports/' + report_file_name + '_best_' + str(k),
+                                      subspace.todense())
+                        best = pcg_score
+
+            # Remove last coma from report line
+            REPORT_LINE = REPORT_LINE[:-1]
+
+            # Write data line in report file
+            with open('reports/' + report_file_name, 'a') as report_file:
+                report_file.write(REPORT_LINE + '\n')
+
+        print()
