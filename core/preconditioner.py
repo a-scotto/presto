@@ -192,8 +192,7 @@ class CoarseGridCorrection(Preconditioner):
         if self.sparse_subspace:
             self._reduced_lin_op = self._reduced_lin_op.todense()
 
-        self._p, self._l, self._u = scipy.linalg.lu(self._reduced_lin_op)
-        self._p = scipy.sparse.csc_matrix(self._p)
+        self._l = scipy.linalg.cho_factor(self._reduced_lin_op, lower=True, overwrite_a=True)
 
         self.building_cost = self._get_building_cost(lin_op.apply_cost, n, k, rank)
         self.size = self._matvec_cost()
@@ -220,9 +219,7 @@ class CoarseGridCorrection(Preconditioner):
     def _apply(self, x):
         y = self._subspace.T.dot(x)
 
-        y = self._p.T.dot(y)
-        y = scipy.linalg.solve_triangular(self._l, y, lower=True)
-        y = scipy.linalg.solve_triangular(self._u, y)
+        scipy.linalg.cho_solve(self._l, y, overwrite_b=True)
 
         y = self._subspace.dot(y)
         return y
