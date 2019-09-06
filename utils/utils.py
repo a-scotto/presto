@@ -50,71 +50,10 @@ def load_operator(file_path, display=True):
     return operator
 
 
-def read_setup(OPERATOR_ROOT_PATH, setup_file_path):
-    """
-    Method to read the benchmark setup text file and return the different setup in a suitable
-    format to run the benchmark.
-
-    :param OPERATOR_ROOT_PATH: Path of folder containing the operators
-    :param setup_file_path: Path of the setup text file
-    """
-
-    operators_list = os.listdir(OPERATOR_ROOT_PATH)
-    operators_list.remove('__pycache__')
-
-    setups = dict()
-
-    # Read the setup text file
-    with open(setup_file_path, 'r') as setup_text_file:
-        # Get the list of text lines
-        content = setup_text_file.readlines()
-
-        # Go through all the lines
-        for line in content:
-            # Skip user dedicated header
-            if line[0] == '>':
-                continue
-
-            # Turn spaced separated data into list
-            operator, n_subspaces, ratio_max, n_tests, sampling_parameters = line.split(' ')
-
-            # Get the sampling method and optionally arguments
-            try:
-                sampling_method, args = sampling_parameters.split(',')
-            except ValueError:
-                sampling_method = sampling_parameters
-                args = None
-
-            setup = dict(n_subspaces=int(n_subspaces),
-                         ratio_max=float(ratio_max),
-                         n_tests=int(n_tests),
-                         sampling=sampling_method,
-                         args=float(args))
-
-            # Build the setup dictionary and append it to the setups list
-            if operator == '*':
-                for operator in operators_list:
-                    try:
-                        setups[OPERATOR_ROOT_PATH + operator].append(setup)
-                    except KeyError:
-                        setups[OPERATOR_ROOT_PATH + operator] = [setup]
-            else:
-                if operator not in operators_list:
-                    raise ValueError('Operator {} not in {}.'.format(operator, OPERATOR_ROOT_PATH))
-
-                try:
-                    setups[OPERATOR_ROOT_PATH + operator].append(setup)
-                except KeyError:
-                    setups[OPERATOR_ROOT_PATH + operator] = [setup]
-
-    return setups
-
-
-def initialize_report(subspace_sizes, operator_path, setup):
+def initialize_report(operator_path, setup):
     """
     Method to create a report file and write the header.
 
-    :param subspace_sizes: list of subspaces size (int) tested in the benchmark.
     :param operator_path: path of the operator to be tested.
     :param setup: dictionary containing the setup parameters.
     """
@@ -123,8 +62,8 @@ def initialize_report(subspace_sizes, operator_path, setup):
     time_ = ''.join(time.strftime("%X").split(':'))
 
     # Sampling method and eventual parameters
-    param = '' if setup['args'] is None else str(setup['args'])
-    sampling = setup['sampling'] + param
+    param = '' if setup['sampling_parameter'] is None else str(setup['sampling_parameter'])
+    sampling = setup['sampling_method'] + param
 
     # Get operator name
     operator_name = os.path.basename(operator_path)
@@ -148,12 +87,12 @@ def initialize_report(subspace_sizes, operator_path, setup):
         report_file.write('>>   REPORT OF PRECONDITIONING STRATEGIES BENCHMARK   << \n')
         report_file.write('> \n')
         report_file.write('>  SOLVER ................. Conjugate Gradient \n')
-        report_file.write('>  NUMBER OF TESTS ........ ' + str(len(subspace_sizes)) + '\n')
+        report_file.write('>  NUMBER OF TESTS ........ ' + str(len(setup['subspaces'])) + '\n')
         report_file.write('>  RUNS PER TEST .......... ' + str(setup['n_tests']) + '\n')
-        report_file.write('>  MINIMAL SUBSPACE SIZE .. ' + str(subspace_sizes[0]) + '\n')
-        report_file.write('>  MAXIMAL SUBSPACE SIZE .. ' + str(subspace_sizes[-1]) + '\n')
+        report_file.write('>  MINIMAL SUBSPACE SIZE .. ' + str(setup['subspaces'][0]) + '\n')
+        report_file.write('>  MAXIMAL SUBSPACE SIZE .. ' + str(setup['subspaces'][-1]) + '\n')
         report_file.write('>  PROBLEM NAME ........... ' + operator_name + '\n')
-        report_file.write('>  REFERENCE RUN ........... ' + str(setup['reference']) + '\n')
+        report_file.write('>  REFERENCE RUN ...........' + str(setup['reference']) + '\n')
         report_file.write('> \n')
         report_file.write('>>>>>>>>>>>>>>>>>>>>>>>>>>>><<<<<<<<<<<<<<<<<<<<<<<<<<<< \n')
         report_file.write('~operator_metadata#' + operator_metadata + '\n')
