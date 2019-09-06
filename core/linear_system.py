@@ -313,7 +313,6 @@ class ConjugateGradient(_LinearSolver):
         arnoldi = None
 
         if self.arnoldi is not None:
-            print(len(self.arnoldi[1]), len(self.arnoldi[0]))
             if len(self.arnoldi[1]) == len(self.arnoldi[0]):
                 del self.arnoldi[1][-1]
 
