@@ -1,6 +1,6 @@
->>   BENCHMARK CONFIGURATION FILE   <<
->>>>>>>>>>>>>>>>>>><<<<<<<<<<<<<<<<<<<
-all,bs,20,100,0.4
-all,bs,20,100,0.6
-all,bs,20,100,0.8
-all,bs,20,100,1.0
+>>>>>   BENCHMARK CONFIGURATION FILE   <<<<<
+>>>>>>>>>>>>>>>>>>>>>><<<<<<<<<<<<<<<<<<<<<<
+>
+> operators | n_subspaces | max_ratio | n_tests | sampling_method, sampling_parameter
+>
+* 20 0.15 100 bs,0.0
