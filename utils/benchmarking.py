@@ -11,6 +11,7 @@ Description:
 
 import os
 import tqdm
+import time
 import numpy
 import scipy.sparse
 
@@ -83,24 +84,20 @@ def read_setup(OPERATOR_ROOT_PATH, setup_file_path):
     return setups
 
 
-def get_reference_run(operator, n_runs=50):
+def set_reference_run(RUN_STORAGE_PATH, lin_op, precond, n_runs=50):
+    """
+    Method to run the Conjugate Gradient a given number of times, to select the left-hand side corresponding to the
+    average run.
 
-    RUN_STORAGE_PATH = 'reports/' + operator['name'] + '_ref'
-
-    # Normalize the operator to enforce 1 lying in the spectrum of the operator
-    u = numpy.random.randn(operator['rank'], 1)
-    gamma = float(u.T.dot(u)) / float(u.T.dot(operator['operator'].dot(u)))
-
-    # Instantiate LinearOperator object
-    A = SelfAdjointMatrix(gamma * operator['operator'], def_pos=True)
-
-    # Instantiate first-level Preconditioner object
-    D = DiagonalPreconditioner(A)
+    :param RUN_STORAGE_PATH: Path to store the results.
+    :param lin_op: LinearOperator object to run the Conjugate Gradient on.
+    :param n_runs: Number of runs to compute the average on.
+    :return:
+    """
 
     # Either load left-hand side from existing file or compute it
     try:
         reference = numpy.loadtxt(RUN_STORAGE_PATH)
-        print('Reference loaded.')
         n_iterations = int(reference[0])
         lhs = reference[1:].reshape(-1, 1)
 
@@ -112,11 +109,11 @@ def get_reference_run(operator, n_runs=50):
         # Run the CG with several left-hand sides
         for i in range(n_runs):
             # Create random left-hand side
-            y = numpy.random.randn(operator['rank'], 1)
-            lin_sys = LinearSystem(A, A.dot(y))
+            y = numpy.random.randn(lin_op['shape'][0], 1)
+            lin_sys = LinearSystem(lin_op, lin_op.dot(y))
 
             # Run the Conjugate Gradient
-            cg = ConjugateGradient(lin_sys, x_0=None, M=D).run()
+            cg = ConjugateGradient(lin_sys, x_0=None, M=precond).run()
 
             # Store results
             lhs.append(lin_sys.lhs)
@@ -130,34 +127,79 @@ def get_reference_run(operator, n_runs=50):
         # Store left-hand side and iterations number in a single stacked array
         reference = numpy.vstack([n_iterations, lhs])
         numpy.savetxt(RUN_STORAGE_PATH, reference)
-        print('Reference created.')
 
-    lin_sys = LinearSystem(A, lhs)
-    cg = ConjugateGradient(lin_sys, M=D, buffer=operator['rank'], tol=1e-10, arnoldi=True).run()
-    cg['n_it'] = n_iterations
+    reference_run = dict(lhs=lhs, n_iterations=n_iterations)
 
-    return cg
+    return reference_run
 
 
-def benchmark(setup, operator):
+def initialize_report(operator, setup):
+    """
+    Method to create a report file and write the header.
 
-    n = operator['rank']
+    :param operator: LinearOperator object to benchmark on.
+    :param setup: dictionary containing the setup parameters.
+    """
+    # Date and time fore report identification
+    date_ = ''.join(time.strftime("%x").split('/'))
+    time_ = ''.join(time.strftime("%X").split(':'))
+
+    # Sampling method and eventual parameters
+    param = '' if setup['sampling_parameter'] is None else str(setup['sampling_parameter'])
+    sampling = setup['sampling_method'] + param
+
+    # Set the report name from metadata above
+    report_name = '_'.join([operator['name'], date_, time_, sampling])
+
+    operator_metadata = '#'.join([str(operator['rank']),
+                                  str(operator['non_zeros']),
+                                  str(operator['conditioning']),
+                                  operator['source']])
+
+    benchmark_metadata = '#'.join([str(setup['reference']),
+                                   str(param)])
+
+    # Header writing
+    with open('reports/' + report_name, 'w') as report_file:
+        report_file.write('>>   REPORT OF PRECONDITIONING STRATEGIES BENCHMARK   << \n')
+        report_file.write('> \n')
+        report_file.write('>  SOLVER ................. Conjugate Gradient \n')
+        report_file.write('>  NUMBER OF TESTS ........ ' + str(setup['n_subspaces']) + '\n')
+        report_file.write('>  RUNS PER TEST .......... ' + str(setup['n_tests']) + '\n')
+        report_file.write('>  MINIMAL SUBSPACE SIZE .. ' + str(setup['sto_subspaces'][0]) + '\n')
+        report_file.write('>  MAXIMAL SUBSPACE SIZE .. ' + str(setup['sto_subspaces'][-1]) + '\n')
+        report_file.write('>  PROBLEM NAME ........... ' + operator['name'] + '\n')
+        report_file.write('>  REFERENCE RUN ...........' + str(setup['reference']) + '\n')
+        report_file.write('> \n')
+        report_file.write('>>>>>>>>>>>>>>>>>>>>>>>>>>>><<<<<<<<<<<<<<<<<<<<<<<<<<<< \n')
+        report_file.write('~operator_metadata#' + operator_metadata + '\n')
+        report_file.write('~benchmark_metadata#' + benchmark_metadata + '\n')
+        report_file.write('>>>>>>>>>>>>>>>>>>>>>>>>>>>><<<<<<<<<<<<<<<<<<<<<<<<<<<< \n')
+
+    return report_name
+
+
+def benchmark(lin_sys, setup):
+    lin_op = lin_sys.lin_op
+    n, _ = lin_op.shape
+
+    lin_sys_lmp = LinearSystem(lin_op, lin_op.dot(numpy.random.randn(n, 1)))
+    cg = ConjugateGradient(lin_sys_lmp, x_0=None, M=setup['first_level_precond'], tol=1e-8).run()
 
     # Test all the subspace sizes
-    for k in tqdm.tqdm(setup['subspaces']):
-        factory = RandomSubspaceFactory((n, k))
+    for i in tqdm.tqdm(range(setup['n_subspaces'])):
 
-        # Run of the PCG with deterministic LMP
-        p = int(k + (n - k) * setup['sampling_parameter'])
+        k_sto = setup['sto_subspaces'][i]
+        k_det = setup['det_subspaces'][i]
 
+        factory = RandomSubspaceFactory((n, k_sto))
 
-        subspace = numpy.hstack(cg['p'][:k_0])
-        lmp_det = LimitedMemoryPreconditioner(A, subspace, M=D)
+        subspace = numpy.hstack(cg['p'][:k_det])
+        lmp_det = LimitedMemoryPreconditioner(lin_op, subspace, M=setup['first_level_precond'])
         pcg = ConjugateGradient(lin_sys, x_0=None, M=lmp_det).run()
 
-        deterministic_report = str(k_0) + '_' + str(pcg['n_it'] / n_iterations_ref)[:4]
-
-        REPORT_LINE = deterministic_report + '#' + str(k) + '_'
+        deterministic_report = str(k_det) + '_' + str(pcg['n_it'] / setup['reference'])[:4]
+        stochastic_report = str(k_sto) + '_'
 
         best = numpy.Inf
         worse = 0
@@ -168,14 +210,13 @@ def benchmark(setup, operator):
             subspace = factory.generate(setup['sampling'], setup['args'])
 
             # Build the LMP from the subspace generated
-            lmp = LimitedMemoryPreconditioner(A, subspace, M=D)
+            lmp = LimitedMemoryPreconditioner(lin_op, subspace, M=setup['first_level_precond'])
 
             # Run the Preconditioned Conjugate Gradient
             pcg = ConjugateGradient(lin_sys, x_0=None, M=lmp).run()
-            pcg_score = pcg['n_it'] / n_iterations_ref
 
             # Add result to the report data line
-            REPORT_LINE += str(pcg_score)[:6] + ','
+            deterministic_report += str(pcg['n_it'] / setup['reference'])[:6] + ','
 
             if k == subspace_sizes[-1]:
                 if pcg_score > worse:

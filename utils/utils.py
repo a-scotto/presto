@@ -50,58 +50,6 @@ def load_operator(file_path, display=True):
     return operator
 
 
-def initialize_report(operator_path, setup):
-    """
-    Method to create a report file and write the header.
-
-    :param operator_path: path of the operator to be tested.
-    :param setup: dictionary containing the setup parameters.
-    """
-    # Date and time fore report identification
-    date_ = ''.join(time.strftime("%x").split('/'))
-    time_ = ''.join(time.strftime("%X").split(':'))
-
-    # Sampling method and eventual parameters
-    param = '' if setup['sampling_parameter'] is None else str(setup['sampling_parameter'])
-    sampling = setup['sampling_method'] + param
-
-    # Get operator name
-    operator_name = os.path.basename(operator_path)
-
-    # Set the report name from metadata above
-    report_name = '_'.join([operator_name, date_, time_, sampling])
-
-    # Load problem for metadata
-    operator = load_operator('operators/' + operator_name, display=False)
-
-    operator_metadata = '#'.join([str(operator['rank']),
-                                  str(operator['non_zeros']),
-                                  str(operator['conditioning']),
-                                  operator['source']])
-
-    benchmark_metadata = '#'.join([str(setup['reference']),
-                                   str(param)])
-
-    # Header writing
-    with open('reports/' + report_name, 'w') as report_file:
-        report_file.write('>>   REPORT OF PRECONDITIONING STRATEGIES BENCHMARK   << \n')
-        report_file.write('> \n')
-        report_file.write('>  SOLVER ................. Conjugate Gradient \n')
-        report_file.write('>  NUMBER OF TESTS ........ ' + str(len(setup['subspaces'])) + '\n')
-        report_file.write('>  RUNS PER TEST .......... ' + str(setup['n_tests']) + '\n')
-        report_file.write('>  MINIMAL SUBSPACE SIZE .. ' + str(setup['subspaces'][0]) + '\n')
-        report_file.write('>  MAXIMAL SUBSPACE SIZE .. ' + str(setup['subspaces'][-1]) + '\n')
-        report_file.write('>  PROBLEM NAME ........... ' + operator_name + '\n')
-        report_file.write('>  REFERENCE RUN ...........' + str(setup['reference']) + '\n')
-        report_file.write('> \n')
-        report_file.write('>>>>>>>>>>>>>>>>>>>>>>>>>>>><<<<<<<<<<<<<<<<<<<<<<<<<<<< \n')
-        report_file.write('~operator_metadata#' + operator_metadata + '\n')
-        report_file.write('~benchmark_metadata#' + benchmark_metadata + '\n')
-        report_file.write('>>>>>>>>>>>>>>>>>>>>>>>>>>>><<<<<<<<<<<<<<<<<<<<<<<<<<<< \n')
-
-    return report_name
-
-
 def extract(OPERATOR_FILE_PATH, hand_val=True):
     OPERATOR_FILE_PATH, _ = os.path.splitext(OPERATOR_FILE_PATH)
     FOLDER_PATH, FILE_NAME = os.path.split(OPERATOR_FILE_PATH)
