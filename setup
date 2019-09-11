@@ -1,6 +1,0 @@
->>>>>   BENCHMARK CONFIGURATION FILE   <<<<<
->>>>>>>>>>>>>>>>>>>>>><<<<<<<<<<<<<<<<<<<<<<
->
-> operators | n_subspaces | max_ratio | n_tests | sampling_method, sampling_parameter
->
-* 20 0.15 100 bs,0.0
