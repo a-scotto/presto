@@ -4,3 +4,4 @@ reports/*
 run.py
 script.py
 setup
+operators/*.ref
