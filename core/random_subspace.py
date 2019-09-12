@@ -27,9 +27,6 @@ class RandomSubspaceFactory(object):
         if not isinstance(shape, tuple) or len(shape) != 2:
             raise RandomSubspaceError('Shape must be a tuple of the form (n, p).')
 
-        if not isinstance(shape[0], int) or not isinstance(shape[1], int):
-            raise RandomSubspaceError('Shape must me a tuple of integers.')
-
         self.shape = shape
 
         try:
@@ -46,8 +43,6 @@ class RandomSubspaceFactory(object):
             return self._gaussian_sparse(*args)
         elif sampling == 'gd':
             return self._gaussian_dense()
-        elif sampling == 't':
-            return self._test(*args)
         else:
             raise ValueError('Sampling strategy unknown.')
 
@@ -97,36 +92,3 @@ class RandomSubspaceFactory(object):
             subspace = subspace.todense()
 
         return subspace
-
-    def _test(self):
-        n, k = self.shape
-        subspace = scipy.sparse.lil_matrix(self.shape)
-
-        target = [i for i in range(n)]
-        random.shuffle(target)
-
-        alpha = 100
-        beta = 0.1 ** 2 / 4 / numpy.log(alpha)
-        theta = beta * n ** 2
-        c = int(numpy.sqrt(theta * numpy.log(alpha)))
-
-        for j in range(k):
-            p = target[j]
-            # x = numpy.asarray([i for i in range(max(p - c, 0), min(p + c + 1, n))])
-            # P = numpy.exp(-(x - p)**2 / theta)
-            #
-            # distribution = scipy.stats.rv_discrete(1, n, values=(x, P / numpy.sum(P)))
-            #
-            # n_points = n_points
-            # n_points = int(numpy.log(n)) + 1
-
-            # for i in range(n_points):
-            for i in range(max(p - c, 0) - p, min(p + c + 1, n) - p):
-
-                # subspace[distribution.rvs(), j] = 1 / n_points**0.5
-                # subspace[distribution.rvs(), j] = numpy.random.randn() / n_points**0.5
-                # subspace[distribution.rvs(), j] = 2 * numpy.random.randint(0, 2) - 1 / n_points**0.5
-
-                subspace[p + i, j] = (2 * numpy.random.randint(0, 2) - 1) / (numpy.abs(i) + 1)**0.5
-
-        return subspace.tocsc()
