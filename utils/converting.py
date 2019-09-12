@@ -10,35 +10,43 @@ Description:
 """
 
 import os
-import time
 import numpy
-import random
+import pickle
 import scipy.io
 import scipy.linalg
 import scipy.sparse
-import pickle
 
 
 class FileExtractionError(Exception):
     """
-    Exception raised when the extraction of a MATLAB file occurs.
+    Exception raised when the extraction of a MATLAB file fails.
     """
 
 
-def load_operator(file_path, display=True):
+class FileExtensionError(Exception):
     """
-    Method to load operator as dictionary from files in operators/ folder.
-
-    :param file_path: Path of the operator to load
-    :param display: Boolean to whether display or not the problem metadata
+    Exception raised when the extension of a specified file do not match requirements.
     """
 
-    # Open the file as binary
-    with open(file_path, 'rb') as file:
+
+def load_operator(OPERATOR_FILE_PATH: str, display: bool = True) -> dict:
+    """
+    Load the binary operator file located at the specified path and return it as dictionary.
+
+    :param OPERATOR_FILE_PATH: Path to the .opr operator file.
+    :param display: Whether to display operator's characteristics or not.
+    """
+
+    # Check that file do have a .opr extension
+    if not OPERATOR_FILE_PATH.endswith('.opr'):
+        raise FileExtensionError('Operator file should have .opr extension.')
+
+    # Open the operator binary file and load the content
+    with open(OPERATOR_FILE_PATH, 'rb') as file:
         p = pickle.Unpickler(file)
         operator = p.load()
 
-    # Display if required
+    # Display the operator characteristics if required
     if display:
         print('Problem {}: shape {} | Conditioning = {:1.2e} | Density = {:1.2e} | NNZ = {}'
               .format(operator['name'],
@@ -50,23 +58,38 @@ def load_operator(file_path, display=True):
     return operator
 
 
-def extract(OPERATOR_FILE_PATH, hand_val=True):
+def extract(OPERATOR_FILE_PATH: str, user_check: bool = True) -> dict:
+    """
+    Return the content of .mat files containing matrices and meta-data as a dictionary and check
+    for potential SVD decomposition .mat file.
+
+    :param OPERATOR_FILE_PATH: Path to the file to extract from.
+    :param user_check: Whether to ask the user if the results match the expectations or not.
+    """
+
+    # Check that file do have a .mat extension
+    if not OPERATOR_FILE_PATH.endswith('.mat'):
+        raise FileExtensionError('Operator file should have .mat extension.')
+
     OPERATOR_FILE_PATH, _ = os.path.splitext(OPERATOR_FILE_PATH)
     FOLDER_PATH, FILE_NAME = os.path.split(OPERATOR_FILE_PATH)
 
+    # Initialize the dictionary with matrix metadata
     operator = dict()
 
-    operator['name'] = FILE_NAME
+    operator['name'] = FILE_NAME.replace('_', '') + '.opr'
     operator['symmetric'] = True
     operator['def_pos'] = True
 
+    # Load the .mat file
     obj = scipy.io.loadmat(OPERATOR_FILE_PATH)['Problem']
 
+    # Skip the useless containers
     while len(obj) == 1:
         obj = obj[0]
 
+    # Search for the Sparse Matrix object stored
     for entree in obj:
-
         if isinstance(entree, numpy.ndarray) and entree.size == 1:
             entree = entree[0]
 
@@ -76,13 +99,17 @@ def extract(OPERATOR_FILE_PATH, hand_val=True):
             operator['shape'] = entree.shape
             operator['rank'] = entree.shape[0]
 
+        # Get the problem source
         elif isinstance(entree, str) and 'problem' in entree.lower():
             operator['source'] = entree.capitalize()
 
+    # Try to access the SVD decomposition file if available
+    SVD_FILE_PATH = os.path.join(FOLDER_PATH, FILE_NAME + '_SVD')
+
     try:
-        SVD_FILE_PATH = os.path.join(FOLDER_PATH, FILE_NAME + '_SVD')
         svd = scipy.io.loadmat(SVD_FILE_PATH)
 
+        # Skip the useless containers
         while len(svd) == 1:
             svd = svd[0]
 
@@ -96,86 +123,21 @@ def extract(OPERATOR_FILE_PATH, hand_val=True):
                 operator['svd'] = entree
                 operator['conditioning'] = float(entree[0] / entree[-1])
 
+    # Handle the case where the SVD decomposition is not available
     except FileNotFoundError:
         operator['svd'] = None
         operator['conditioning'] = None
 
-    clean_name = ''.join(operator['name'].split('_'))
-
-    if hand_val:
+    # Let the user manually check the information extracted
+    if user_check:
         for key, val in operator.items():
             print('{}: {}'.format(key, val))
 
-        valid = input('Satisfying content ? [y/n] ')
+        valid = ''
+        while valid not in ['y', 'n']:
+            valid = input('Is the extraction result satisfying? [y/n] ')
 
-        if valid != 'y':
+        if valid == 'n':
             raise FileExtractionError
-        else:
-            pass
 
-    with open('operators/' + clean_name, 'wb') as file:
-        p = pickle.Pickler(file)
-        p.dump(operator)
-
-    try:
-        os.remove(OPERATOR_FILE_PATH + '.mat')
-        os.remove(SVD_FILE_PATH + '.mat')
-    except FileNotFoundError:
-        os.remove(OPERATOR_FILE_PATH + '.mat')
-
-
-def convert_to_col(X):
-    """
-    Convert numpy.ndarray to column stack format, i.e. of shape (m, n) with m > n.
-
-    :param X: numpy.ndarray with arbitrary shape
-    :return: numpy.ndarray with shape (m, n) with m > n.
-    """
-
-    if len(X.shape) == 1:
-        X = numpy.atleast_2d(X).T
-
-    if len(X.shape) != 2:
-        raise ValueError('Impossible to convert to columns numpy.ndarray of dimension =/= 2.')
-
-    if X.shape[1] > X.shape[0]:
-        X = X.T
-
-    return X
-
-
-def split_lhs(lhs, n_slice, randomize=True, return_sparse=True):
-    """
-
-    :param lhs:
-    :param n_slice:
-    :param randomize:
-    :param return_sparse:
-    :return:
-    """
-    lhs = convert_to_col(lhs)
-    slice_size = lhs.size // n_slice + 1
-    index = [k for k in range(lhs.size)]
-
-    if randomize:
-        random.shuffle(index)
-
-    lhs_slices = []
-
-    for k in range(n_slice):
-        if k < n_slice - 1:
-            ind = index[k * slice_size:(k + 1) * slice_size]
-        else:
-            ind = index[k * slice_size:]
-
-        lhs_s = numpy.zeros_like(lhs)
-        lhs_s[ind] = lhs[ind]
-        lhs_slices.append(lhs_s)
-
-    lhs_slices = numpy.hstack(lhs_slices)
-
-    if return_sparse:
-        lhs_slices = scipy.sparse.csr_matrix(lhs_slices)
-
-    return lhs_slices
-
+    return operator
