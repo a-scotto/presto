@@ -169,7 +169,7 @@ class IdentityPreconditioner(Preconditioner):
     def __init__(self, lin_op: LinearOperator) -> None:
         super().__init__(lin_op.shape, lin_op.dtype, lin_op)
 
-        self.name = 'identity'
+        self.name = 'Identity'
 
     def _apply(self, x):
         return x
@@ -201,7 +201,7 @@ class DiagonalPreconditioner(Preconditioner):
 
         super().__init__(matrix_op.shape, matrix_op.dtype, matrix_op)
 
-        self.name = 'jacobi'
+        self.name = 'Jacobi'
 
     def _apply(self, x):
         return self._diag.dot(x)
@@ -239,7 +239,7 @@ class SymmetricSuccessiveOverRelaxation(Preconditioner):
 
         super().__init__(matrix_op.shape, matrix_op.dtype, matrix_op)
 
-        self.name = 'ssor'
+        self.name = 'SSOR'
 
     def _apply(self, x):
         scipy.sparse.linalg.spsolve_triangular(self._upper, x, lower=False, overwrite_b=True)
@@ -313,7 +313,7 @@ class CoarseGridCorrection(Preconditioner):
 
         super().__init__(lin_op.shape, dtype, lin_op)
 
-        self.name = 'cgc'
+        self.name = 'Coarse-Grid'
 
         self.building_cost = self._get_building_cost()
 
@@ -365,4 +365,4 @@ class LimitedMemoryPreconditioner(Preconditioner):
 
         super().__init__(H.shape, H.dtype, H.lin_op)
 
-        self.name = 'lmp'
+        self.name = 'LMP'
