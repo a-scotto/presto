@@ -33,7 +33,7 @@ class LinearOperator(scipyLinearOperator):
     """
 
     def __init__(self, shape: tuple, dtype: object) -> None:
-        # Sanitize shape argument
+        # Sanitize the shape attribute
         if not isinstance(shape, tuple) or len(shape) != 2:
             raise LinearOperatorError('Shape must be a tuple of the form (n, p).')
 
@@ -42,7 +42,7 @@ class LinearOperator(scipyLinearOperator):
 
         self.shape = shape
 
-        # Sanitize dtype argument
+        # Sanitize the dtype attribute
         try:
             self.dtype = numpy.dtype(dtype)
         except TypeError:
@@ -78,11 +78,11 @@ class _ScaledLinearOperator(LinearOperator):
     """
 
     def __init__(self, lin_op: LinearOperator, scalar: object) -> None:
-        # Sanitize the lin_op argument
+        # Sanitize the lin_op attribute
         if not isinstance(lin_op, LinearOperator):
             raise LinearOperatorError('External product should involve a LinearOperator.')
 
-        # Sanitize the scalar argument
+        # Sanitize the scalar attribute
         if not numpy.isscalar(scalar):
             raise LinearOperatorError('External product should involve a scalar.')
 
@@ -110,7 +110,7 @@ class _SummedLinearOperator(LinearOperator):
     """
 
     def __init__(self, lin_op1: LinearOperator, lin_op2: LinearOperator) -> None:
-        # Sanitize the lin_op1 and lin_op2 arguments
+        # Sanitize the lin_op1 and lin_op2 attributes
         if not isinstance(lin_op1, LinearOperator) or not isinstance(lin_op2, LinearOperator):
             raise LinearOperatorError('Both operands in summation must be LinearOperator.')
 
@@ -142,7 +142,7 @@ class _ComposedLinearOperator(LinearOperator):
     """
 
     def __init__(self, lin_op1: LinearOperator, lin_op2: LinearOperator) -> None:
-        # Sanitize the lin_op1 and lin_op2 arguments
+        # Sanitize the lin_op1 and lin_op2 attributes
         if not isinstance(lin_op1, LinearOperator) or not isinstance(lin_op2, LinearOperator):
             raise LinearOperatorError('Both operands must be LinearOperator.')
 
@@ -174,7 +174,7 @@ class _AdjointLinearOperator(LinearOperator):
     """
 
     def __init__(self, lin_op: LinearOperator) -> None:
-        # Sanitize the lin_op arguments
+        # Sanitize the lin_op attribute
         if not isinstance(lin_op, LinearOperator):
             raise LinearOperatorError('Adjoint is only defined for LinearOperator.')
 
@@ -194,7 +194,7 @@ class IdentityOperator(LinearOperator):
     """
 
     def __init__(self, order: int) -> None:
-        # Sanitize the order argument
+        # Sanitize the order attribute
         if not isinstance(order, int) or order < 1:
             raise LinearOperatorError('IdentityOperator should have a positive integer order.')
 
@@ -216,7 +216,7 @@ class MatrixOperator(LinearOperator):
     """
 
     def __init__(self, matrix) -> None:
-        # Sanitize the matrix argument
+        # Sanitize the matrix attribute
         if isinstance(matrix, (numpy.ndarray, numpy.matrix)):
             self.sparse = False
 
@@ -278,7 +278,7 @@ class DiagonalMatrix(MatrixOperator):
     """
 
     def __init__(self, diagonals: list) -> None:
-        # Sanitize diagonals argument
+        # Sanitize the diagonals attribute
         if isinstance(diagonals, list):
             diagonals = numpy.asarray(diagonals)
 
@@ -293,7 +293,7 @@ class TriangularMatrix(MatrixOperator):
     """
 
     def __init__(self, matrix, lower: bool = False) -> None:
-        # Sanitize the matrix argument
+        # Sanitize the matrix attribute
         if len(matrix.shape) != 2 or matrix.shape[0] != matrix.shape[1]:
             raise MatrixOperatorError('TriangularMatrix matrix must be of square shape.')
 
@@ -308,7 +308,7 @@ class SelfAdjointMatrix(MatrixOperator):
     """
 
     def __init__(self, matrix, def_pos: bool = False) -> None:
-        # Sanitize the matrix argument
+        # Sanitize the matrix attribute
         if len(matrix.shape) != 2 or matrix.shape[0] != matrix.shape[1]:
             raise MatrixOperatorError('SelfAdjointMatrix matrix must be of square shape.')
 
