@@ -28,7 +28,7 @@ class Preconditioner(LinearOperator):
     """
 
     def __init__(self, shape: tuple, dtype: object, lin_op: LinearOperator) -> None:
-        # Sanitize lin_op argument
+        # Sanitize the lin_op attribute
         if not isinstance(lin_op, LinearOperator):
             raise PreconditionerError('Preconditioner should be built from LinearOperator.')
 
@@ -65,11 +65,11 @@ class _ScaledPreconditioner(Preconditioner):
     """
 
     def __init__(self, preconditioner: Preconditioner, scalar: object) -> None:
-        # Sanitize preconditioner argument
+        # Sanitize the preconditioner attribute
         if not isinstance(preconditioner, Preconditioner):
             raise PreconditionerError('External product should involve a Preconditioner.')
 
-        # Sanitize scalar argument
+        # Sanitize the scalar attribute
         if not numpy.isscalar(scalar):
             raise PreconditionerError('External product should involve a scalar.')
 
@@ -95,7 +95,7 @@ class _SummedPreconditioner(Preconditioner):
     """
 
     def __init__(self, precond1: Preconditioner, precond2: Preconditioner) -> None:
-        # Sanitize precond1 and precond2 arguments
+        # Sanitize the precond1 and precond2 attributes
         if not isinstance(precond1, Preconditioner) or not isinstance(precond2, Preconditioner):
             raise PreconditionerError('Both operands in summation must be Preconditioner.')
 
@@ -129,7 +129,7 @@ class _ComposedPreconditioner(Preconditioner):
     """
 
     def __init__(self, precond1: Preconditioner, precond2: Preconditioner) -> None:
-        # Sanitize precond1 and precond2 arguments
+        # Sanitize the precond1 and precond2 attribute
         if not isinstance(precond1, Preconditioner) or not isinstance(precond2, Preconditioner):
             raise PreconditionerError('Both operands in composition must be Preconditioner.')
 
@@ -267,7 +267,7 @@ class CoarseGridCorrection(Preconditioner):
         :param rank_tol: Maximum ratio of extrema singular values above which the effective rank is
         decreased.
         """
-        # Sanitize the subspace argument
+        # Sanitize the subspace attribute
         self.sparse_subspace = scipy.sparse.isspmatrix(subspace)
 
         if not isinstance(subspace, (numpy.ndarray, numpy.matrix)) and not self.sparse_subspace:
@@ -343,7 +343,7 @@ class LimitedMemoryPreconditioner(Preconditioner):
         :param subspace: Subspace on which the projection is made.
         :param M: First-level preconditioner.
         """
-        # Sanitize first-level preconditioner argument
+        # Sanitize the first-level preconditioner attribute
         if M is not None and not isinstance(M, Preconditioner):
             raise PreconditionerError('LMP first-level preconditioner must be a Preconditioner.')
 
