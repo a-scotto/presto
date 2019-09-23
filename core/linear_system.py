@@ -12,7 +12,7 @@ Description:
 import numpy
 import scipy.linalg
 
-from core.linear_operator import LinearOperator, SelfAdjointMatrix
+from core.linear_operator import LinearOperator
 from core.preconditioner import Preconditioner, IdentityPreconditioner
 
 
@@ -30,25 +30,36 @@ class LinearSolverError(Exception):
 
 class LinearSystem(object):
     """
-    Abstract class to model linear systems.
+    Abstract class to model a linear system of the form Ax = b, where A is a linear operator and the
+    left-hand side b, a vector of corresponding shape.
     """
 
     def __init__(self,
-                 lin_op,
-                 lhs,
-                 x_sol=None):
+                 lin_op: LinearOperator,
+                 lhs: numpy.ndarray,
+                 x_sol: numpy.ndarray = None) -> None:
+        """
+        Constructor of the LinearSystem class.
 
+        :param lin_op: LinearOperator involved in the linear system.
+        :param lhs: Left-hand side associated.
+        :param x_sol: Optional explicit solution of the linear system if available.
+        """
+
+        # Sanitize the linear operator attribute
         if not isinstance(lin_op, LinearOperator):
             raise LinearSystemError('A LinearSystem must be defined with a LinearOperator.')
 
         self.lin_op = lin_op
 
+        # Sanitize the left-hand side attribute
         if not isinstance(lhs, numpy.ndarray):
             raise LinearSystemError('LinearSystem left-hand side must be numpy.ndarray')
 
         if lhs.shape[0] != lin_op.shape[1]:
             raise LinearSystemError('Linear map and left-hand side shapes do not match.')
 
+        # Initialize the linear system's attributes
         self.lhs = lhs
         self.scaling = numpy.linalg.norm(lhs)
         self.x_sol = x_sol
@@ -57,42 +68,55 @@ class LinearSystem(object):
         self.shape = self.lin_op.shape
         self.dtype = numpy.find_common_type([self.lin_op.dtype, self.lhs.dtype], [])
 
-    def get_residual(self, x):
+    def get_residual(self, x: numpy.ndarray):
+        """
+        Compute the explicit residual r(x) = Ax - b.
+
+        :param x: Vector on which the residual is computed.
+        """
+
         return self.lhs - self.lin_op.dot(x)
 
     def __repr__(self):
+        """
+        Set the printable linear system representation in a suitable manner.
+        """
+
         _repr = 'Linear system of shape {} with left-hand side of shape {}.'\
                 .format(self.lin_op.shape, self.lhs.shape)
+
         return _repr
 
 
 class _LinearSolver(object):
     """
-    Abstract class to model linear systems.
+    Abstract class to build linear solver, i.e. solver aimed at finding the solution of a linear
+    system Ax = b.
     """
 
     def __init__(self,
-                 lin_sys,
-                 x_0=None,
-                 M=None,
-                 tol=1e-5,
-                 maxiter=None):
+                 lin_sys: LinearSystem,
+                 x_0: numpy.ndarray = None,
+                 M: Preconditioner = None,
+                 tol: float = 1e-5,
+                 maxiter: int = None) -> None:
         """
-        Constructor of LinearSolver class. Instantiate a LinearSolver object.
+        Constructor of LinearSolver class.
 
-        :param lin_sys:
-        :param x_0:
-        :param M:
-        :param tol:
-        :param maxiter:
+        :param lin_sys: Linear system to be solved.
+        :param x_0: Initial guess for the linear system solution.
+        :param M: Preconditioner to be used to enhance solver convergence.
+        :param tol: Relative tolerance threshold.
+        :param maxiter: Maximum number of iterations affordable.
         """
 
-        # Sanitize the initialization of class attributes
+        # Sanitize the linear system attribute
         if not isinstance(lin_sys, LinearSystem):
             raise LinearSolverError('LinearSolver requires a LinearSystem.')
 
         self.lin_sys = lin_sys
 
+        # Sanitize the initial guess attribute
         x_0 = numpy.zeros_like(lin_sys.lhs) if x_0 is None else x_0
 
         if x_0 is not None and not isinstance(x_0, numpy.ndarray):
@@ -104,6 +128,7 @@ class _LinearSolver(object):
         self.x_0 = numpy.copy(x_0)
         self.x = numpy.zeros_like(x_0)
 
+        # Sanitize the preconditioners attribute
         if M is None:
             M = IdentityPreconditioner(lin_sys.lin_op)
 
@@ -123,18 +148,19 @@ class _LinearSolver(object):
 
         self.M_i = M
 
+        # Initialize the linear solver's attributes
         self.tol = tol
         self.maxiter = maxiter
         self.monitor = self._initialize()
 
     def _initialize(self):
-        raise LinearSolverError('Linear solvers must implement a _initialize method.')
+        raise LinearSolverError('LinearSolver must implement a _initialize method.')
 
     def _finalize(self):
-        raise LinearSolverError('Linear solvers must implement a _finalize method.')
+        raise LinearSolverError('LinearSolver must implement a _finalize method.')
 
     def run(self):
-        raise LinearSolverError('Linear solvers must implement a run method.')
+        raise LinearSolverError('LinearSolver must implement a run method.')
 
 
 class _SolverMonitor(object):
@@ -144,20 +170,22 @@ class _SolverMonitor(object):
     historic of the residues.
     """
 
-    def __init__(self, history, auxiliaries=None, buffer=False):
+    def __init__(self, history: object, auxiliaries: list = None, buffer: int = False) -> None:
+        """
+        Constructor of SolverMonitor object.
+
+        :param history: Either scalars or list of scalars related to LinearSolver.
+        :param auxiliaries: List of LinearSolver non-scalar iterations quantities.
+        :param buffer: Number of iterations quantities to store.
         """
 
-        :param history:
-        :param auxiliaries:
-        :param buffer:
-        """
-
-        # Sanitize the initialization of class attributes
+        # Sanitize the historic data attribute
         if isinstance(history, list) and not all(numpy.isscalar(item) for item in history):
-                raise LinearSolverError('History quantity must be a scalar or list of scalars.')
+            raise LinearSolverError('History quantity must be a scalar or list of scalars.')
         if not isinstance(history, list) and not numpy.isscalar(history):
             raise LinearSolverError('History quantity must be a scalar or list of scalars.')
-
+        
+        # Initialize history attribute as list of list
         try:
             self._history = [[h_i] for h_i in history]
         except TypeError:
@@ -165,18 +193,21 @@ class _SolverMonitor(object):
 
         self.n_hist = len(self._history)
 
+        # Sanitize the auxiliaries quantities attribute
         auxiliaries = [] if auxiliaries is None else auxiliaries
         if not isinstance(auxiliaries, list):
-            raise LinearSolverError('"auxiliaries" must be a list.')
+            raise LinearSolverError('Auxiliaries quantities must be provided as a list.')
         if not all(isinstance(a_i, numpy.ndarray) for a_i in auxiliaries):
-                raise LinearSolverError('Auxiliary quantity must be a numpy.ndarray.')
+                raise LinearSolverError('Auxiliary quantity must be of numpy.ndarray type.')
 
         self._auxiliaries = auxiliaries
         self.n_aux = len(auxiliaries)
 
+        # Sanitize the buffer attribute
         if buffer and not isinstance(buffer, int) and not buffer >= 0:
             raise LinearSolverError('Argument buffer must be either "False" or positive integer.')
-
+        
+        # If buffer then turn auxiliaries into list so as to store them
         if buffer:
             for i in range(len(self._auxiliaries)):
                 self._auxiliaries[i] = [self._auxiliaries[i]]
@@ -184,15 +215,25 @@ class _SolverMonitor(object):
         self._buffer = 0 if not buffer else buffer
         self.n_it = 0
 
-    def update(self, history, auxiliaries):
+    def update(self, history, auxiliaries: list) -> None:
+        """
+        Update the SolverMonitor history and auxiliaries attributes. This method is called when 
+        the update of the different quantities have been done in the LinearSolver, and it updates
+        buffer content. 
 
+        :param history: History quantities to add to the SolverMonitor historic.
+        :param auxiliaries: Auxiliaries quantity to add/replace in the SolverMonitor auxiliaries 
+        list.
+        """
+        
         history = [history] if not isinstance(history, list) else history
-
+        
+        # Check that the number of auxiliary data is consistent through iterations
         if len(auxiliaries) != self.n_aux and len(auxiliaries) != 0:
             raise LinearSolverError('Updating a different number of auxiliaries than expected.')
-
+        
+        # Add or replace auxiliaries quantities depending on the buffer size
         for i in range(len(auxiliaries)):
-
             if not isinstance(auxiliaries[i], numpy.ndarray):
                 raise LinearSolverError('Auxiliaries must be numpy.ndarray.')
 
@@ -205,19 +246,27 @@ class _SolverMonitor(object):
                     del self._auxiliaries[i][0]
                     self._auxiliaries[i].append(auxiliaries[i])
 
+        # Check that the number of historic data is consistent through iterations
         if len(history) != self.n_hist:
             raise LinearSolverError('Updating a different number of history items than expected.')
-
+        
+        # Add historic quantities to the solver history
         for i in range(len(history)):
-
             if not numpy.isscalar(history[i]):
                 raise LinearSolverError('History items must be scalars.')
 
             self._history[i].append(history[i])
-
+        
+        # New iteration processed
         self.n_it += 1
 
-    def get_previous(self, index=-1):
+    def get_previous(self, index: int = -1) -> list:
+        """
+        Method to access previous auxiliaries quantities computed and stored in the buffer.
+        :param index: Number of iteration back to retrieve from.
+        """
+        
+        # Explore the buffer if there is one, else get the last quantities updated
         if self._buffer:
             previous_auxiliary = []
             for aux_i in self._auxiliaries:
@@ -227,33 +276,51 @@ class _SolverMonitor(object):
 
         return previous_auxiliary
 
-    def get_auxiliaries(self):
+    def get_auxiliaries(self) -> object:
+        """
+        Arrange the auxiliaries in a suitable manner before returning.
+        """
         ret = []
         if not self._buffer:
             return self._auxiliaries
-
+        
+        # If the buffer is not empty, go through it
         for i in range(self.n_aux):
             aux_history = self._auxiliaries[i]
             ret.append(aux_history)
-
+        
+        # Return a list if necessary
         if self.n_aux == 1:
             return ret[0]
         else:
             return ret.__iter__()
 
-    def get_history(self):
+    def get_history(self) -> object:
+        """
+        Arrange the historic data in a suitable manner before returning.
+        """
         ret = []
-
+        
+        # Stack the historic data
         for i in range(self.n_hist):
             history = numpy.stack(self._history[i])
             ret.append(history.T)
 
+        # Return a list if necessary
         if self.n_hist == 1:
             return ret[0]
         else:
             return ret.__iter__()
 
-    def report(self, solver_name, initial_res, final_res):
+    def report(self, solver_name: str, initial_res: float, final_res: float) -> str:
+        """
+        Create the report to print once the LinearSolver has achieved its run.
+        
+        :param solver_name: Name of the solver used.
+        :param initial_res: Initial norm of the residual.
+        :param final_res: Final norm of the residual.
+        """
+        
         string = '{:25}: run of {:4} iteration(s)  |  '.format(solver_name, self.n_it)
         string += 'Final absolute 2-norm residual = {:1.4e}  |  '.format(final_res)
         string += 'Relative 2-norm residual reduction = {:1.4e}'.format(final_res / initial_res)
@@ -261,13 +328,34 @@ class _SolverMonitor(object):
 
 
 class ConjugateGradient(_LinearSolver):
+    """
+    Abstract class to implement the Conjugate Gradient method with possible use of preconditioner.
+    """
 
-    def __init__(self, lin_sys, x_0=None, M=None, tol=1e-5, buffer=None, arnoldi=False):
-        if not isinstance(lin_sys.lin_op, SelfAdjointMatrix) and not lin_sys.lin_op.def_pos:
-            raise LinearSolverError('Conjugate Gradient only apply to s.d.p linear map.')
+    def __init__(self,
+                 lin_sys: LinearSystem,
+                 x_0: numpy.ndarray = None,
+                 M: Preconditioner = None,
+                 tol: float = 1e-5,
+                 buffer: int = 0,
+                 arnoldi: bool = False) -> None:
+        """
+        Constructor of the ConjugateGradient class.
+
+        :param lin_sys: LinearSystem to solve.
+        :param x_0: Initial guess of the linear system.
+        :param M: Preconditioner to use during the resolution.
+        :param tol: Relative tolerance to achieve before stating convergence.
+        :param buffer: Size of the buffer memory.
+        :param arnoldi: Whether or not storing the Arnoldi relation elements.
+        """
+        
+        # Sanitize the linear system attribute
+        if not hasattr(lin_sys.lin_op, 'def_pos'):
+            raise LinearSolverError('Conjugate Gradient only apply to s.d.p linear operators.')
 
         if lin_sys.lin_op.shape[0] != lin_sys.lin_op.shape[1]:
-            raise LinearSolverError('Conjugate Gradient only apply to square problems.')
+            raise LinearSolverError('Conjugate Gradient only apply to square operators.')
 
         if lin_sys.block:
             raise LinearSolverError('Conjugate Gradient only apply to simple left-hand side.')
@@ -280,38 +368,54 @@ class ConjugateGradient(_LinearSolver):
 
         self.iteration_cost = self._iteration_cost()
 
+        # Sanitize the preconditioner attribute
         if not isinstance(self.M_i, Preconditioner):
             raise LinearSolverError('Conjugate Gradient can handle only one preconditioner.')
 
-    def _initialize(self):
-        operator_cost = self.lin_sys.lin_op.apply_cost
-        n, _ = self.lin_sys.lhs.shape
-
+    def _initialize(self) -> _SolverMonitor:
+        """
+        Initialization of the Conjugate Gradient method. Namely compute the initial residue, descent
+        direction, and preconditioned residual.
+        """
+        
+        # Initialize the algorithm with scaled residual r_0, then z_0 and p_0
         r = self.lin_sys.get_residual(self.x_0) / self.lin_sys.scaling
-
         z = self.M_i.apply(r)
         p = numpy.copy(z)
+        
+        # Aggregate as auxiliaries quantities
         auxiliaries = [z, p, r]
-
+        
+        # Compute initial cost and residual norm
         residue = numpy.linalg.norm(r)
-        cost = 2 * operator_cost + n
+        cost = self.lin_sys.lin_op.apply_cost + self.M_i.apply_cost
+        
+        # Aggregate as history quantities
         history = [residue, cost]
-
+        
+        # Scale the tolerance and update total cost
         self.tol *= residue
         self.total_cost += cost
 
         return _SolverMonitor(history, auxiliaries=auxiliaries, buffer=self.buffer)
 
-    def _finalize(self):
+    def _finalize(self) -> None:
+        """
+        Finalize the Conjugate Gradient algorithm by post-processing the data aggregated during the 
+        run and making up the output dictionary gathering all the final values.
+        """
+        
+        # Get residuals and iterations cost and scale back the residuals
         residues, cost = self.monitor.get_history()
         residues *= self.lin_sys.scaling
-
+        
+        # Get the available auxiliaries, depending on the buffer content
         z, p, r = self.monitor.get_auxiliaries()
-
+        
+        # Make up the report line to print
         report = self.monitor.report('Conjugate Gradient', residues[0], residues[-1])
-
-        arnoldi = None
-
+        
+        # Compute the Arnoldi tridiagonal matrix coefficient if it was required
         if self.arnoldi is not None:
             if len(self.arnoldi[1]) == len(self.arnoldi[0]):
                 del self.arnoldi[1][-1]
@@ -323,44 +427,55 @@ class ConjugateGradient(_LinearSolver):
             t_sub_diag = []
 
             for i in range(len(self.arnoldi[1])):
-
                 t_diag.append(float((d_k[i + 1] + beta_k[i]**2 * d_k[i]) / residues[i + 1]**2))
                 t_sub_diag.append(float(-beta_k[i] * d_k[i] / residues[i] / residues[i + 1]))
 
             arnoldi = (t_diag, t_sub_diag)
+        else:
+            arnoldi = None
+        
+        # Make up the output dictionary with all final values
+        output = dict(report=report,
+                      x_opt=self.x_0 + self.x * self.lin_sys.scaling,
+                      n_iterations=self.monitor.n_it,
+                      residues=residues,
+                      arnoldi=arnoldi,
+                      cost=cost,
+                      z=z,
+                      p=p,
+                      r=r)
 
-        output = {'report': report,
-                  'x': self.x_0 + self.x * self.lin_sys.scaling,
-                  'n_it': self.monitor.n_it,
-                  'residues': residues,
-                  'arnoldi': arnoldi,
-                  'cost': cost,
-                  'z': z,
-                  'p': p,
-                  'r': r}
+        self.output = output
 
-        return output
-
-    def _iteration_cost(self):
-        operator_cost = self.lin_sys.lin_op.apply_cost
+    def _iteration_cost(self) -> float:
+        """
+        Details the Flops counting for one iteration of the Conjugate Gradient.
+        """
+        
         n, _ = self.lin_sys.lhs.shape
-        total_cost = 0
 
-        total_cost += 2 * operator_cost     # q_k
-        total_cost += 4*n + 1               # alpha
-        total_cost += 2*n                   # self.x
-        total_cost += 2*n                   # r_k
-        total_cost += 2*n                   # residue
-        total_cost += self.M_i.apply_cost   # z_k
-        total_cost += 4*n + 1               # beta
-        total_cost += 2*n                   # p_k
+        total_cost = self.lin_sys.lin_op.apply_cost     # q_k = A * p_k
+        total_cost += 4*n + 1                           # alpha_k
+        total_cost += 2*n                               # x_k
+        total_cost += 2*n                               # r_k
+        total_cost += 2*n                               # ||r_k||
+        total_cost += self.M_i.apply_cost               # z_k
+        total_cost += 4*n + 1                           # beta
+        total_cost += 2*n                               # p_k
 
         return total_cost
 
-    def run(self, verbose=False):
+    def run(self, verbose: bool = False) -> None:
+        """
+        Method to actually run the Conjugate Gradient algorithm. At of the run the end, it update 
+        its own output attribute with the final values found.
+        """
+        
         for k in range(self.maxiter):
+            # Get the previous iterates quantities
             z, p, r = self.monitor.get_previous()
-
+            
+            # process the recurrence relations of the Conjugate Gradient
             q_k = self.lin_sys.lin_op.dot(p)
             rho_k = z.T.dot(r)
             d_k = p.T.dot(q_k)
@@ -372,6 +487,7 @@ class ConjugateGradient(_LinearSolver):
             residue = numpy.linalg.norm(r_k)
             self.total_cost += self.iteration_cost
 
+            # Break whenever the tolerance is reached
             if residue < self.tol:
                 self.monitor.update([residue, self.total_cost], [])
                 break
@@ -380,21 +496,44 @@ class ConjugateGradient(_LinearSolver):
             beta = z_k.T.dot(r_k) / rho_k
             p_k = z_k + beta * p
 
+            # Update the iterated quantities with their new values
             self.monitor.update([residue, self.total_cost], [z_k, p_k, r_k])
 
+            # Store the elements required to compute the Arnoldi matrix if required
             if self.arnoldi is not None:
                 self.arnoldi[0].append(d_k)
                 self.arnoldi[1].append(beta)
 
-        output = self._finalize()
-
-        return output
+        # Sanitize the output elements
+        self._finalize()
 
 
 class BlockConjugateGradient(_LinearSolver):
+    """
+    Abstract class to implement the Block Conjugate Gradient method with possible use of
+    preconditioner.
+    """
 
-    def __init__(self, lin_sys, x_0=None, M=None, buffer=None, tol=1e-5, rank_tol=1e-5):
-        if not isinstance(lin_sys.lin_op, SelfAdjointMatrix) and not lin_sys.lin_op.def_pos:
+    def __init__(self,
+                 lin_sys: LinearSystem,
+                 x_0: numpy.ndarray = None,
+                 M: Preconditioner = None,
+                 buffer: int = 0,
+                 tol: float = 1e-5,
+                 rank_tol: float = 1e-5):
+        """
+        Constructor of the ConjugateGradient class.
+
+        :param lin_sys: LinearSystem to solve.
+        :param x_0: Initial guess of the linear system.
+        :param M: Preconditioner to use during the resolution.
+        :param tol: Relative tolerance to achieve before stating convergence.
+        :param buffer: Size of the buffer memory.
+        :param rank_tol: Maximum ratio of extrema singular values accepted to consider full rank.
+        """
+
+        # Sanitize the linear system attribute
+        if not hasattr(lin_sys.lin_op, 'def_pos'):
             raise LinearSolverError('Block Conjugate Gradient only apply to s.d.p linear map.')
 
         if lin_sys.lin_op.shape[0] != lin_sys.lin_op.shape[1]:
@@ -409,77 +548,106 @@ class BlockConjugateGradient(_LinearSolver):
 
         super().__init__(lin_sys, x_0, M, tol, lin_sys.shape[0])
 
-        if isinstance(self.M_i, list) and len(self.M_i != lin_sys.lhs.shape[1]):
-            raise LinearSolverError('There must be as many preconditioners as left-hand sides.')
-
-        elif not isinstance(self.M_i, Preconditioner):
-            raise LinearSolverError('Block Conjugate Gradient can handle only one preconditioner.')
+        # Sanitize the preconditioner attribute
+        if not isinstance(self.M_i, Preconditioner):
+            raise LinearSolverError('Conjugate Gradient can handle only one preconditioner.')
 
     def _initialize(self):
-        operator_cost = self.lin_sys.lin_op.apply_cost
-        n, k = self.lin_sys.lhs.shape
+        """
+        Initialization of the Block Conjugate Gradient method. Namely compute the initial block
+        residue R_0, block descent direction P_0, and block preconditioned residual Z_0.
+        """
+        n, k = self.x_0.shape
 
+        # Initialize the algorithm with scaled residual R_0, then Z_0 and P_0
         R = self.lin_sys.get_residual(self.x_0) / self.lin_sys.scaling
+
+        # Detect rank deficiency in the initial block residue with QR-SVD
         r = scipy.linalg.qr(R, mode='r')[0]
         s = scipy.linalg.svd(r, compute_uv=False)
-        rank = numpy.sum(s * (1 / s[0]) > self.rank_tol)
+        effective_rank = numpy.sum(s * (1 / s[0]) > self.rank_tol)
         eps_rank = s[-1] / s[0]
 
-        Z = self.M_i.apply(R[:, :rank])
+        Z = self.M_i.apply(R[:, :effective_rank])
         P = numpy.copy(Z)
+
+        # Aggregate as auxiliaries quantities
         auxiliaries = [Z, P, R]
 
-        residue = max(numpy.linalg.norm(R[:, :rank], axis=0))
-        cost = 2*operator_cost*k + n*k + 2 * self.lin_sys.lhs.size
-        history = [residue, cost, rank, eps_rank]
+        # Initial residual in max norm
+        residue = max(numpy.linalg.norm(R[:, :effective_rank], axis=0))
+        cost = k * (self.lin_sys.lin_op.apply_cost + self.M_i.apply_cost)
+        cost += 2*n*k**2 + 2*k**3
 
+        # Aggregate as history quantities
+        history = [residue, cost, effective_rank, eps_rank]
+
+        # Scale the tolerance and update total cost
         self.tol *= residue
         self.total_cost += cost
 
         return _SolverMonitor(history, auxiliaries=auxiliaries, buffer=self.buffer)
 
-    def _finalize(self):
+    def _finalize(self) -> None:
+        """
+        Finalize the Block Conjugate Gradient algorithm by post-processing the data aggregated
+        during the run and making up the output dictionary gathering all the final values.
+        """
+
+        # Get residuals and iterations cost and scale back the residuals
         residues, cost, rank, eps_rank = self.monitor.get_history()
         residues *= numpy.linalg.norm(self.lin_sys.scaling)
 
+        # Get the available auxiliaries, depending on the buffer content
         Z, P, R = self.monitor.get_auxiliaries()
 
+        # Make up the report line to print
         report = self.monitor.report('Block Conjugate Gradient', residues[0], residues[-1])
 
-        output = {'report': report,
-                  'x': self.x_0 + self.x * self.lin_sys.scaling,
-                  'n_it': self.monitor.n_it,
-                  'residues': residues,
-                  'cost': cost,
-                  'rank': rank,
-                  'eps_rank': eps_rank,
-                  'Z': Z,
-                  'P': P,
-                  'R': R}
+        # Make up the output dictionary with all final values
+        output = dict(report=report,
+                      x_opt=self.x_0 + self.x * self.lin_sys.scaling,
+                      n_iterations=self.monitor.n_it,
+                      residues=residues,
+                      cost=cost,
+                      z=Z,
+                      p=P,
+                      r=R)
 
-        return output
+        self.output = output
 
-    def _iteration_cost(self, alpha):
-        operator_cost = self.lin_sys.lin_op.apply_cost
+    def _iteration_cost(self, alpha) -> float:
+        """
+        Details the Flops counting for one iteration of the Block Conjugate Gradient.
+
+        :param alpha: Matrix equal to (P^T * A * P)^(-1) * (Z^T * R) which size gives the number
+        of not yet converged columns and rank deficiency.
+        """
+
         n, k = self.lin_sys.lhs.shape
         r, c = alpha.shape
         total_cost = 0
 
-        total_cost += 2 * operator_cost * r     # Q_k
-        total_cost += 2 * n * r**2              # delta
-        total_cost += 4*r*r**2 + 22*r**3        # SVD of delta
-        total_cost += r                         # s_inv
-        total_cost += 2*(r*n*c + 3*r*r*c)       # alpha
-        total_cost += n*c + 2*r*n*c             # self.x
-        total_cost += n*c + 2*r*n*c             # R_k
-        total_cost += 2*n*r**2                  # residue
-        total_cost += self.M_i.apply_cost       # Z_k
-        total_cost += 2*(r*n*r + 3*r*r*k)       # beta
-        total_cost += 2*n*r*r + n*r             # P_k
+        total_cost += self.lin_sys.lin_op.apply_cost * r    # Q_k
+        total_cost += 2*n*r**2                              # delta
+        total_cost += 26*r**3                               # SVD of delta
+        total_cost += r                                     # s_inv
+        total_cost += 2*(r*n*c + 3*r*r*c)                   # alpha
+        total_cost += n*c + 2*r*n*c                         # self.x
+        total_cost += n*c + 2*r*n*c                         # R_k
+        total_cost += 2*n*r**2                              # residue
+        total_cost += self.M_i.apply_cost                   # Z_k
+        total_cost += 2*(r*n*r + 3*r*r*k)                   # beta
+        total_cost += 2*n*r*r + n*r                         # P_k
 
         return total_cost
 
     def run(self, verbose=False):
+        """
+        Method to actually run the Block Conjugate Gradient algorithm. At of the run the end, it
+        update its own output attribute with the final values found.
+        """
+
         for k in range(self.maxiter):
             # Retrieve last iterates quantities
             Z, P, R = self.monitor.get_previous()
@@ -504,15 +672,15 @@ class BlockConjugateGradient(_LinearSolver):
             # Computation of A-conjugation corrector alpha
             alpha = v.T @ numpy.diag(sigma_inv) @ u.T @ Z.T.dot(R[:, active_cols])
 
-            # Update of iterate
+            # Update of active iterate
             self.x[:, active_cols] += P.dot(alpha)
-
             R[:, active_cols] -= Q_k.dot(alpha)
 
+            # Update historic data
             residue = max(residues)
-
             self.total_cost += self._iteration_cost(alpha)
 
+            # Break whenever max norm tolerance is reached
             if residue < self.tol:
                 self.monitor.update([residue, self.total_cost, rank, 1], [])
                 break
@@ -524,6 +692,5 @@ class BlockConjugateGradient(_LinearSolver):
 
             self.monitor.update([residue, self.total_cost, rank, 1], [Z, P, R])
 
-        output = self._finalize()
-
-        return output
+        # Sanitize the output elements
+        self._finalize()
