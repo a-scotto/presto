@@ -12,11 +12,10 @@ Description:
 import numpy
 import argparse
 
-from utils.benchmarking import read_setup, set_reference_run, initialize_report, benchmark
+from utils.operator import load_operator
 from core.linear_operator import SelfAdjointMatrix
-from core.preconditioner import DiagonalPreconditioner
-from core.linear_system import ConjugateGradient, LinearSystem
-from utils.utils import load_operator
+from core.preconditioner import DiagonalPreconditioner, SymmetricSuccessiveOverRelaxation
+from utils.benchmarking import read_setup, set_reference_run, initialize_report, benchmark
 
 OPERATOR_ROOT_PATH = 'operators/'
 
@@ -45,33 +44,38 @@ for operator_path in setups.keys():
 
     # Instantiate first-level Preconditioner object
     first_level_precond = DiagonalPreconditioner(lin_op)
-    setup['first_level_precond'] = first_level_precond
 
     # Set the path to store the results
-    RUN_STORAGE_PATH = 'reports/' + operator['name'] + '_ref'
+    REFERENCE_RUN_PATH = 'runs/' + operator['name'] + '_' + first_level_precond.name + '.ref'
 
-    reference_run = set_reference_run(RUN_STORAGE_PATH, lin_op, first_level_precond)
+    # Set/get the reference run to compare with.
+    reference_run = set_reference_run(REFERENCE_RUN_PATH, lin_op, first_level_precond)
+
+    # Get the number of iterations corresponding to the tolerance tested
+    tolerance = 1e-5
+    n_iterations = 0
+    residues = reference_run.output['residues']
+    for i in range(reference_run.output['n_iterations']):
+        if residues[i] / residues[0] < tolerance:
+            n_iterations = i
+            break
 
     for setup in setups[operator_path]:
         # Add reference run to setup dictionary
-        setup['reference'] = reference_run['n_iterations']
+        setup['reference'] = n_iterations
 
         # Define the stochastic LMP subspace sizes to be tested
         step = int(n * setup['max_ratio']) // setup['n_subspaces'] + 1
         sto_subspaces = numpy.asarray([step * (i + 1) for i in range(setup['n_subspaces'])])
-        setup['sto_subspaces'] = sto_subspaces
+        setup['sto_subspaces'] = sto_subspaces.astype(int)
 
         # Define the corresponding deterministic LMP subspace sizes
-        p = numpy.array(sto_subspaces * (1 - setup['sampling_parameter']) + n, dtype=numpy.int)
-        det_subspaces = (4 * nnz_A + 6 * p + sto_subspaces**2) // (8 * n) + 1
-        setup['det_subspaces'] = det_subspaces
+        p = numpy.array(sto_subspaces * (1 - setup['sampling_parameter']) + n)
+        det_subspaces = (2*lin_op.apply_cost + 6*p + 4*sto_subspaces**2) // (8*n) + 1
+        setup['det_subspaces'] = det_subspaces.astype(int)
 
-        # Initialize the report text file
-        report_file_name = initialize_report(operator, setup)
-
-        # Create the reference LinearSystem object
-        lin_sys = LinearSystem(lin_op, reference_run['lhs'])
+        # Initialize the report
+        setup['report_path'] = initialize_report(operator, setup)
 
         # Benchmark the operator with setup configuration
-        benchmark(lin_sys, setup)
-
+        benchmark(reference_run, setup)
