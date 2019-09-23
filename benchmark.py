@@ -61,8 +61,9 @@ for operator_path in setups.keys():
             break
 
     for setup in setups[operator_path]:
-        # Add reference run to setup dictionary
+        # Add reference iterations number and first-level preconditioner to setup dictionary
         setup['reference'] = n_iterations
+        setup['first_lvl_preconditioner'] = first_level_precond.name
 
         # Define the stochastic LMP subspace sizes to be tested
         step = int(n * setup['max_ratio']) // setup['n_subspaces'] + 1
