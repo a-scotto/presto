@@ -22,13 +22,29 @@ class RandomSubspaceError(Exception):
 
 
 class RandomSubspaceFactory(object):
+    """
+    Abstract class for a RandomSubspace factory.
+    """
 
-    def __init__(self, shape, dtype=numpy.float64, sparse_tol=5e-2):
+    def __init__(self,
+                 shape: tuple,
+                 dtype: object = numpy.float64,
+                 sparse_tol: float = 5e-2) -> None:
+        """
+        Constructor of the RandomSubspaceFactory.
+
+        :param shape: Shape of the subspaces to build.
+        :param dtype: Type of the subspace coefficients.
+        :param sparse_tol: Tolerance below which a subspace is considered as sparse.
+        """
+
+        # Sanitize the shape attribute
         if not isinstance(shape, tuple) or len(shape) != 2:
             raise RandomSubspaceError('Shape must be a tuple of the form (n, p).')
 
         self.shape = shape
 
+        # Sanitize the dtype attribute
         try:
             self.dtype = numpy.dtype(dtype)
         except TypeError:
@@ -36,59 +52,75 @@ class RandomSubspaceFactory(object):
 
         self.sparse_tol = sparse_tol
 
-    def generate(self, sampling, *args):
-        if sampling == 'bs':
+    def generate(self, sampling_method: str, *args) -> object:
+        """
+        Generic method to generate subspaces from various distribution.
+
+        :param sampling_method: Name of the distribution to the draw the subspace from.
+        :param args: Optional arguments for distributions.
+        """
+
+        if sampling_method == 'binary_sparse':
             return self._binary_sparse(*args)
-        elif sampling == 'gs':
+
+        elif sampling_method == 'gaussian_sparse':
             return self._gaussian_sparse(*args)
-        elif sampling == 'gd':
-            return self._gaussian_dense()
+
         else:
-            raise ValueError('Sampling strategy unknown.')
+            raise ValueError('Sampling method {} unknown.'.format(sampling_method))
 
     def _binary_sparse(self, d):
+        """
+        Draw a subspace from the Binary Sparse distribution.
+
+        :param d: Control the sparsity of the subspace. The subspace will contain p = k + d(n - k)
+        non-zeros elements.
+        """
+
+        # Initialize subspace in lil format to allow easy update
         n, k = self.shape
         subspace = scipy.sparse.lil_matrix(self.shape)
 
-        r = int(k + (n - k) * d)
-        rows = [i % n for i in range(r)]
+        # Number of non-zeros elements
+        p = int(k + (n - k) * d)
+
+        # Random rows selection
+        rows = [i % n for i in range(p)]
         random.shuffle(rows)
 
-        for i in range(r):
-            subspace[rows[i], i % k] = (2 * numpy.random.randint(0, 2) - 1) / numpy.sqrt(r / k)
+        # Random column selection
+        columns = [i % k for i in range(k * (p // k + 1))]
+        random.shuffle(columns)
+
+        for i in range(p):
+            subspace[rows[i], columns[i]] = (2 * numpy.random.randint(0, 2) - 1) / numpy.sqrt(p / k)
 
         return subspace.tocsc()
 
     def _gaussian_sparse(self, d):
+        """
+        Draw a subspace from the Gaussian Sparse distribution.
+
+        :param d: Control the sparsity of the subspace. The subspace will contain p = k + d(n - k)
+        non-zeros elements.
+        """
+
+        # Initialize subspace in lil format to allow easy update
         n, k = self.shape
         subspace = scipy.sparse.lil_matrix(self.shape)
 
-        r = int(k + (n - k) * d)
-        rows = [i % n for i in range(r)]
+        # Number of non-zeros elements
+        p = int(k + (n - k) * d)
+
+        # Random rows selection
+        rows = [i % n for i in range(p)]
         random.shuffle(rows)
 
-        for i in range(r):
-            subspace[rows[i], i % k] = numpy.random.randn()
+        # Random column selection
+        columns = [i % k for i in range(k * (p // k + 1))]
+        random.shuffle(columns)
+
+        for i in range(p):
+            subspace[rows[i], columns[i]] = numpy.random.randn()
 
         return subspace.tocsc()
-
-    def _gaussian_dense(self, density=1., loc=0, scale=None):
-        n, k = self.shape
-
-        if scale is None:
-            try:
-                scale = 1 / (1 - density)
-            except ZeroDivisionError:
-                scale = 1.
-
-        rvs = scipy.stats.norm(loc=loc, scale=scale)
-
-        if not 0. < density <= 1.:
-            raise RandomSubspaceError('Density must be float between 0 and 1.')
-
-        subspace = scipy.sparse.random(n, k, density=density, format='csr', data_rvs=rvs.rvs)
-
-        if density > self.sparse_tol:
-            subspace = subspace.todense()
-
-        return subspace
