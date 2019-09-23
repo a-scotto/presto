@@ -73,6 +73,7 @@ def read_setup(OPERATOR_ROOT_PATH: str, SETUP_FILE_PATH: str) -> dict:
                     except KeyError:
                         setups[OPERATOR_PATH] = [setup]
             else:
+                operators = operators + '.opr'
                 OPERATOR_PATH = os.path.join(OPERATOR_ROOT_PATH, operators)
 
                 if operators not in operators_list:
@@ -170,7 +171,8 @@ def initialize_report(operator: dict, setup: dict) -> str:
                                   str(operator['conditioning']),
                                   operator['source']])
 
-    benchmark_metadata = '#'.join([str(setup['reference']),
+    benchmark_metadata = '#'.join([setup['first_lvl_preconditioner'],
+                                   str(setup['reference']),
                                    str(setup['sampling_parameter'])])
 
     # Header writing
