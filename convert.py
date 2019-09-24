@@ -10,10 +10,11 @@ Description:
 """
 
 import os
+import pickle
 import fnmatch
 import argparse
 
-from tools.utils import extract
+from utils.operator import extract
 
 OPERATORS_PATH = 'operators/'
 
@@ -38,5 +39,15 @@ for operator_file_name in operators_files:
 
     # Extract content
     print('Extracting from {}... '.format(operator_path), end='')
-    extract(operator_path)
+    operator = extract(operator_path)
     print('Done.')
+
+    with open('operators/' + operator['name'], 'wb') as file:
+        p = pickle.Pickler(file)
+        p.dump(operator)
+
+    os.remove(operator_path)
+    try:
+        os.remove(operator_path[:-4] + '_SVD.mat')
+    except FileNotFoundError:
+        pass
