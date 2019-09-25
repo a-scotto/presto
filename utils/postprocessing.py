@@ -38,7 +38,7 @@ def read_report(REPORT_PATH):
                 metadata['cond'] = float(_metadata[2])
                 metadata['source'] = _metadata[3]
 
-            # Read and storebenchmark setup metadata
+            # Read and store benchmark setup metadata
             elif data.startswith('~benchmark_metadata'):
                 _metadata = data.split('#')[1:]
                 metadata['first_lvl_preconditioner'] = _metadata[0]
