@@ -91,7 +91,7 @@ def read_setup(OPERATOR_ROOT_PATH: str, SETUP_FILE_PATH: str) -> dict:
 def set_reference_run(REFERENCE_RUN_PATH: str,
                       lin_op: LinearOperator,
                       precond: Preconditioner,
-                      n_runs: int = 50) -> ConjugateGradient:
+                      n_runs: int = 100) -> ConjugateGradient:
     """
     Method to run the Conjugate Gradient a given number of times, to select the left-hand side
     corresponding to the average run.
@@ -127,7 +127,8 @@ def set_reference_run(REFERENCE_RUN_PATH: str,
             n_iterations.append(cg.output['n_iterations'])
 
         # Get the index of the average run
-        average_run = int(numpy.argmin(numpy.asarray(n_iterations) - numpy.mean(n_iterations)))
+        n_iterations = numpy.asarray(n_iterations)
+        average_run = int(numpy.argmin(numpy.abs(n_iterations - numpy.mean(n_iterations))))
 
         # Set the average linear system
         lin_sys = LinearSystem(lin_op, lhs[average_run])
