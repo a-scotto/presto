@@ -10,6 +10,7 @@ Description:
 """
 
 import numpy
+import scipy.sparse
 import scipy.linalg
 
 from core.linear_operator import LinearOperator
@@ -362,7 +363,7 @@ class ConjugateGradient(_LinearSolver):
 
         self.buffer = buffer
         self.total_cost = 0
-        self.arnoldi = ([], []) if arnoldi else None
+        self.arnoldi = dict(beta_k=list(), d_k=list(), rho_k=list()) if arnoldi else None
 
         super().__init__(lin_sys, x_0, M, tol, lin_sys.shape[0])
 
@@ -414,25 +415,21 @@ class ConjugateGradient(_LinearSolver):
         
         # Make up the report line to print
         report = self.monitor.report('Conjugate Gradient', residues[0], residues[-1])
+
+        arnoldi = None
         
         # Compute the Arnoldi tridiagonal matrix coefficient if it was required
-        if self.arnoldi is not None:
-            if len(self.arnoldi[1]) == len(self.arnoldi[0]):
-                del self.arnoldi[1][-1]
+        if isinstance(self.arnoldi, dict):
+            # Remove last beta_k in case convergence was not reached
+            if len(self.arnoldi['d_k']) == len(self.arnoldi['beta_k']):
+                del self.arnoldi['beta_k'][-1]
 
-            d_k = self.arnoldi[0]
-            beta_k = self.arnoldi[1]
+            D = scipy.sparse.diags(self.arnoldi['d_k'])
+            N = scipy.sparse.diags(self.arnoldi['rho_k'])
+            B = scipy.sparse.eye(self.monitor.n_it) + scipy.sparse.diags(self.arnoldi['beta_k'],
+                                                                         offsets=1)
 
-            t_diag = [float(d_k[0] / residues[0]**2)]
-            t_sub_diag = []
-
-            for i in range(len(self.arnoldi[1])):
-                t_diag.append(float((d_k[i + 1] + beta_k[i]**2 * d_k[i]) / residues[i + 1]**2))
-                t_sub_diag.append(float(-beta_k[i] * d_k[i] / residues[i] / residues[i + 1]))
-
-            arnoldi = (t_diag, t_sub_diag)
-        else:
-            arnoldi = None
+            arnoldi = N @ B.T @ D @ B @ N
         
         # Make up the output dictionary with all final values
         output = dict(report=report,
@@ -489,6 +486,12 @@ class ConjugateGradient(_LinearSolver):
 
             # Break whenever the tolerance is reached
             if residue < self.tol:
+
+                # Store the elements required to compute the Arnoldi matrix if required
+                if isinstance(self.arnoldi, dict):
+                    self.arnoldi['d_k'].append(float(d_k))
+                    self.arnoldi['rho_k'].append(float(1 / rho_k**0.5))
+
                 self.monitor.update([residue, self.total_cost], [])
                 break
 
@@ -500,9 +503,10 @@ class ConjugateGradient(_LinearSolver):
             self.monitor.update([residue, self.total_cost], [z_k, p_k, r_k])
 
             # Store the elements required to compute the Arnoldi matrix if required
-            if self.arnoldi is not None:
-                self.arnoldi[0].append(d_k)
-                self.arnoldi[1].append(beta)
+            if isinstance(self.arnoldi, dict):
+                self.arnoldi['d_k'].append(float(d_k))
+                self.arnoldi['rho_k'].append(float(1 / rho_k**0.5))
+                self.arnoldi['beta_k'].append(float(-beta))
 
         # Sanitize the output elements
         self._finalize()
