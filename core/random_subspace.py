@@ -52,7 +52,7 @@ class RandomSubspaceFactory(object):
 
         self.sparse_tol = sparse_tol
 
-    def generate(self, sampling_method: str, *args) -> object:
+    def generate(self, sampling_method: str, *args, **kwargs) -> object:
         """
         Generic method to generate subspaces from various distribution.
 
@@ -61,15 +61,18 @@ class RandomSubspaceFactory(object):
         """
 
         if sampling_method == 'binary_sparse':
-            return self._binary_sparse(*args)
+            return self._binary_sparse(*args, **kwargs)
 
         elif sampling_method == 'gaussian_sparse':
-            return self._gaussian_sparse(*args)
+            return self._gaussian_sparse(*args, **kwargs)
+
+        elif sampling_method == 'nystrom':
+            return self._nystrom(*args, **kwargs)
 
         else:
             raise ValueError('Sampling method {} unknown.'.format(sampling_method))
 
-    def _binary_sparse(self, d):
+    def _binary_sparse(self, d: float) -> scipy.sparse.csc_matrix:
         """
         Draw a subspace from the Binary Sparse distribution.
 
@@ -97,7 +100,7 @@ class RandomSubspaceFactory(object):
 
         return subspace.tocsc()
 
-    def _gaussian_sparse(self, d):
+    def _gaussian_sparse(self, d: float) -> scipy.sparse.csc_matrix:
         """
         Draw a subspace from the Gaussian Sparse distribution.
 
@@ -124,3 +127,40 @@ class RandomSubspaceFactory(object):
             subspace[rows[i], columns[i]] = numpy.random.randn()
 
         return subspace.tocsc()
+
+    def _nystrom(self, lin_op: scipy.sparse.spmatrix, p: int = 10) -> numpy.ndarray:
+        """
+        Compute a spectral approximation of the higher singular vectors of a linear operator using
+        the Nyström method. It is a stochastic method for low-rank approximation here utilized to
+        generate approximate spectral information.
+
+        :param lin_op : Sparse matrix to process the spectral approximation on.
+        :param p: Over-sampling parameter meant to increase the approximation accuracy.
+        """
+        # Retrieve the problem dimension
+        n, k = self.shape
+
+        # Draw a Gaussian block of appropriate size
+        G = numpy.random.randn(n, k + p)
+
+        # Form the sample matrix Y
+        Y = lin_op.dot(G)
+
+        # Orthogonalize the columns of the sample matrix
+        Q, _ = scipy.linalg.qr(Y, mode='economic')
+
+        # Form B1 oh shape (m, k + p) and B2 of shape (k + p, k + p)
+        B1 = lin_op.dot(Q)
+        B2 = Q.T.dot(B1)
+
+        # Perform a Cholesky factorization of B2 as B2 = C^T * C where C is upper triangular
+        C = scipy.linalg.cholesky(B2)
+
+        # Form F = B1 C^{-1} by solving C^T F^T = B1^T, F is of size (m,k+p)
+        H = scipy.linalg.solve_triangular(C, B1.transpose(), 'T')
+        F = H.transpose()
+
+        # Perform the economical SVD decomposition of F
+        U, _, _ = scipy.linalg.svd(F, full_matrices=False)
+
+        return U[:, :k]
