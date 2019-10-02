@@ -215,15 +215,14 @@ def benchmark(reference_run: ConjugateGradient, setup: dict) -> None:
     cg = ConjugateGradient(lin_sys_lmp_det,
                            x_0=None,
                            M=first_level_precond,
-                           tol=1e-8,
+                           tol=1e-5,
                            arnoldi=True,
                            buffer=numpy.Inf)
     cg.run()
 
     # Compute the Ritz vectors from the Arnoldi relation, i.e. the tridiagonal matrix
-    tridiag = numpy.diag(cg.output['arnoldi'][0]) / 2 + numpy.diag(cg.output['arnoldi'][1], k=1)
-    _, eig_vectors = numpy.linalg.eig(tridiag + tridiag.T)
-    ritz_vectors = numpy.hstack(cg.output['r'][:-1]).dot(eig_vectors)
+    _, eig_vectors = numpy.linalg.eig(cg.output['arnoldi'].todense())
+    ritz_vectors = numpy.hstack(cg.output['z']).dot(eig_vectors)
 
     # Initialize variables to avoid code inspection troubles
     k_det, k_sto = None, None
