@@ -360,9 +360,12 @@ class LimitedMemoryPreconditioner(Preconditioner):
         Q = CoarseGridCorrection(lin_op, subspace)
         H = Q * M * Q
 
-        self._matvec_cost = lambda: (Q * M * Q).apply_cost
-        self._apply = (Q * M * Q).apply
+        self.cost = H.apply_cost
+        self._apply = H.apply
 
         super().__init__(H.shape, H.dtype, H.lin_op)
 
         self.name = 'LMP'
+
+    def _matvec_cost(self):
+        return self.cost
