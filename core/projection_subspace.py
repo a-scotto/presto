@@ -14,6 +14,9 @@ import random
 import scipy.stats
 import scipy.sparse
 
+from core.linear_system import LinearSystem, ConjugateGradient
+from core.preconditioner import Preconditioner, IdentityPreconditioner
+
 
 class RandomSubspaceError(Exception):
     """
@@ -21,10 +24,126 @@ class RandomSubspaceError(Exception):
     """
 
 
+class KrylovSubspaceError(Exception):
+    """
+    Exception raised when KrylovSubspace object encounters specific errors.
+    """
+
+
+class KrylovSubspaceFactory(object):
+    """
+    Abstract class for a Krylov subspace factory.
+    """
+
+    basis = ['directions',
+             'residuals',
+             'precond_residuals',
+             'ritz']
+
+    def __init__(self,
+                 shape: tuple,
+                 lin_sys: LinearSystem,
+                 M: Preconditioner = None,
+                 dtype: object = numpy.float64) -> None:
+        """
+        Constructor of the RandomSubspaceFactory.
+
+        :param shape: Shape of the subspaces to build.
+        :param lin_sys: Linear system to build the Krylov subspace from.
+        :param M: Preconditioner for a potential preconditioned Krylov subspace.
+        :param dtype: Type of the subspace coefficients.
+        """
+
+        # Sanitize the shape attribute
+        if not isinstance(shape, tuple) or len(shape) != 2:
+            raise KrylovSubspaceError('Shape must be a tuple of the form (n, p).')
+
+        self.shape = shape
+
+        # Sanitize the linear system attribute
+        if not isinstance(lin_sys, LinearSystem):
+            raise KrylovSubspaceError('KrylovSubspace requires a LinearSystem object.')
+
+        self.lin_sys = lin_sys
+
+        # Sanitize the preconditioner attribute
+
+        M = IdentityPreconditioner(lin_sys.lin_op) if M is None else M
+
+        if not isinstance(M, Preconditioner):
+            raise KrylovSubspaceError('Preconditioned Krylov Subspace requires a Preconditioner '
+                                      'object.')
+
+        self.M = M
+
+        # Sanitize the dtype attribute
+        try:
+            self.dtype = numpy.dtype(dtype)
+        except TypeError:
+            raise KrylovSubspaceError('dtype provided not understood')
+
+        cg = ConjugateGradient(self.lin_sys,
+                               M=M,
+                               tol=0.,
+                               buffer=self.shape[1],
+                               arnoldi=True)
+
+        cg.maxiter = self.shape[1]
+        cg.run()
+
+        self.R, self.P, self.Z, self.ritz = self.process(cg)
+
+    @staticmethod
+    def process(cg: ConjugateGradient) -> tuple:
+        """
+        Process the different basis of the Krylov subspace computed during the run of the conjugate
+        gradient. Aggregate the A-conjugate, M-conjugate, and M^(-1)-conjugate basis as well as the
+        Ritz vectors from the tridiagonal matrix.
+
+        :param cg: Conjugate gradient converged to process the krylov subspace built.
+        """
+
+        # Stack the descent directions, residuals and preconditioned residuals
+        P = numpy.hstack(cg.output['p'])
+        Z = numpy.hstack(cg.output['p'])
+        R = numpy.hstack(cg.output['p'])
+
+        # Compute the Ritz vectors from the tridiagonal matrix of the Arnoldi relation
+        _, eigen_vectors = numpy.linalg.eig(cg.output['arnoldi'].todense())
+        ritz_vectors = Z.dot(eigen_vectors)
+
+        return R, P, Z, ritz_vectors
+
+    def get(self, krylov_basis: str) -> numpy.ndarray:
+        """
+        Generic method to get the different subspaces possibly
+        :param krylov_basis: Name of the Krylov subspace basis required
+        """
+
+        if krylov_basis == 'directions':
+            return self.P
+
+        elif krylov_basis == 'residuals':
+            return self.R
+
+        elif krylov_basis == 'precond_residuals':
+            return self.Z
+
+        elif krylov_basis == 'ritz':
+            return self.ritz
+
+        else:
+            raise KrylovSubspaceError('Krylov basis {} unknown.'.format(krylov_basis))
+
+
 class RandomSubspaceFactory(object):
     """
     Abstract class for a RandomSubspace factory.
     """
+
+    samplings = ['binary_sparse',
+                 'gaussian_sparse',
+                 'nystrom']
 
     def __init__(self,
                  shape: tuple,
@@ -70,7 +189,7 @@ class RandomSubspaceFactory(object):
             return self._nystrom(*args, **kwargs)
 
         else:
-            raise ValueError('Sampling method {} unknown.'.format(sampling_method))
+            raise RandomSubspaceError('Sampling method {} unknown.'.format(sampling_method))
 
     def _binary_sparse(self, d: float) -> scipy.sparse.csc_matrix:
         """
