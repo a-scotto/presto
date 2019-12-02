@@ -9,71 +9,142 @@ Created on September 23, 2019 at 15:22.
 Description:
 """
 
+import os
 import numpy
 
+from core.linear_operator import LinearOperator
 
-def read_report(REPORT_PATH):
 
+def arrange_report(reports: list) -> dict:
+    """
+    Method to arrange the reports file so as to gather the reports concerning the same operators.
+
+    :param reports: List of reports paths to sort.
+    """
+    # Initialize variable
+    arranged_reports = dict()
+
+    for REPORT_PATH in reports:
+        # Skip not concerned files
+        if not REPORT_PATH.endswith('.rpt'):
+            continue
+
+        _, report_name = os.path.split(REPORT_PATH)
+
+        operator = report_name.split('_')[0]
+
+        # Aggregate the reports path according to the problem tested
+        if operator not in arranged_reports.keys():
+            arranged_reports[operator] = [REPORT_PATH]
+        else:
+            arranged_reports[operator].append(REPORT_PATH)
+
+    return arranged_reports
+
+
+def read_report(REPORT_PATH: str) -> tuple:
+    """
+    Method to read report text files (.rpt files) to extract metadata and data from a benchmark.
+
+    :param REPORT_PATH: Path of the report to read.
+    """
+    # Initialize variables
     metadata = dict()
-
-    stochastic_results = dict(sizes=[], means=[], stdevs=[])
-    deterministic_results = dict(sizes=[])
+    data = dict()
 
     # Open up the report text file
     with open(REPORT_PATH, 'r') as report:
         # Get the list of text lines
 
-        content = report.readlines()
-
-        for data in content:
+        for line in report.readlines():
             # Skip report header
-            if data.startswith('>'):
+            if line.startswith('>'):
                 continue
 
             # Read and store operator metadata
-            elif data.startswith('~operator_metadata'):
-                _metadata = data.split('#')[1:]
-                metadata['size'] = int(_metadata[0])
-                metadata['nnz'] = int(_metadata[1])
-                metadata['cond'] = float(_metadata[2])
-                metadata['source'] = _metadata[3]
+            elif line.startswith('~operator_metadata'):
+                _metadata = line.split(': ')[1]
+                size, non_zeros, conditioning, source = _metadata.split(', ')
+
+                metadata['size'] = int(size)
+                metadata['nnz'] = int(non_zeros)
+                metadata['cond'] = float(conditioning)
+                metadata['source'] = source
 
             # Read and store benchmark setup metadata
-            elif data.startswith('~benchmark_metadata'):
-                _metadata = data.split('#')[1:]
-                metadata['first_lvl_preconditioner'] = _metadata[0]
-                metadata['reference'] = int(_metadata[1])
-                metadata['sampling_parameter'] = float(_metadata[2])
+            elif line.startswith('~benchmark_metadata'):
+                _metadata = line.split(': ')[1]
+                first_lvl_preconditioner, reference, subspace_type, subspace_parameter = _metadata.split(', ')
+
+                metadata['first_lvl_preconditioner'] = first_lvl_preconditioner
+                metadata['reference'] = int(reference)
+                metadata['subspace_type'] = subspace_type
+                try:
+                    metadata['subspace_parameter'] = float(subspace_parameter)
+                except ValueError:
+                    metadata['subspace_parameter'] = None
 
             # Read algorithm runs data
             else:
-                deterministic_data, stochastic_data = data.split('#')
+                # Remove spaces
+                line = line.replace(' ', '')
 
-                k_det, deterministic_perfs = deterministic_data.split('_')
-                k_sto, stochastic_perfs = stochastic_data.split('_')
+                # Retrieve and convert data
+                subspace_size, performances = line.split('|')
+                performances = performances.split(',')
+                performances = [float(p_i) for p_i in performances]
 
-                # Convert data into list of float
-                deterministic_perfs = list(map(lambda x: float(x), deterministic_perfs.split(',')))
-                stochastic_perfs = list(map(lambda x: float(x), stochastic_perfs.split(',')))
+                data[subspace_size] = numpy.asarray(performances)
 
-                deterministic_results['sizes'].append(int(k_det))
-                stochastic_results['sizes'].append(int(k_sto))
+    return metadata, data
 
-                for i in range(len(deterministic_perfs)):
-                    try:
-                        deterministic_results[str(i)].append(deterministic_perfs[i])
-                    except KeyError:
-                        deterministic_results[str(i)] = [deterministic_perfs[i]]
 
-                stochastic_results['means'].append(numpy.mean(stochastic_perfs))
-                stochastic_results['stdevs'].append(numpy.std(stochastic_perfs))
+def convert_to_dense(k: numpy.array, lin_op_size: int, lin_op_order: int) -> numpy.array:
+    """
+    Method to convert a sparse subspace size to a dense subspace size keeping the criterion chosen constant (either
+    memory requirements or application cost).
 
-    stochastic_results['sizes'] = numpy.asarray(stochastic_results['sizes'])
-    stochastic_results['means'] = numpy.asarray(stochastic_results['means'])
-    stochastic_results['stdevs'] = numpy.asarray(stochastic_results['stdevs'])
+    :param k: Sparse subspace size to convert.
+    :param lin_op_size: Linear operator involved in the conversion.
+    :param lin_op_order: Linear operator involved in the conversion.
+    """
 
-    deterministic_results['sizes'] = numpy.asarray(deterministic_results['sizes'])
-    for i in range(len(deterministic_results.keys()) - 1):
-        deterministic_results[str(i)] = numpy.asarray(deterministic_results[str(i)])
+    # Sanitize argument
+    if isinstance(k, int) or isinstance(k, float) or isinstance(k, list):
+        k = numpy.asarray(k)
+    elif not isinstance(k, numpy.ndarray):
+        raise ValueError('Subspaces must be of type numpy.array or of convertible type.')
 
-    return metadata, deterministic_results, stochastic_results
+    # Process conversion
+    application_cost = 4*k**2 + 4*lin_op_size + lin_op_order
+
+    converted_subspaces = numpy.asarray(application_cost / (8*lin_op_order), dtype=numpy.int32)
+
+    return converted_subspaces
+
+
+def process_data(data: dict) -> tuple:
+    """
+    Method to process the data from a report. Namely, compute statistics if necessary and convert to a suitable format
+    for plots.
+
+    :param data: Dictionary of data extracted from a report text file.
+    """
+    # Initialize variables
+    subspace_sizes = list()
+    mean = list()
+    standard_deviation = list()
+
+    for subspace_size, performances in data.items():
+        subspace_sizes.append(float(subspace_size))
+        mean.append(float(numpy.mean(performances)))
+        standard_deviation.append(float(numpy.std(performances)))
+
+    subspace_sizes = numpy.asarray(subspace_sizes)
+    mean = numpy.asarray(mean)
+    standard_deviation = numpy.asarray(standard_deviation)
+
+    processed_data = dict(mean=mean,
+                          standard_deviation=standard_deviation)
+
+    return subspace_sizes, processed_data
