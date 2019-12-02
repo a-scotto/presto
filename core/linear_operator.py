@@ -315,3 +315,21 @@ class SelfAdjointMatrix(MatrixOperator):
         super().__init__(matrix)
 
         self.def_pos = def_pos
+
+
+class NormalEquations(SelfAdjointMatrix):
+    """
+    Abstract class for normal equations operator. Namely take A in R^{m \times n} with m > n and
+    compute the matrix-vector product A*Ax.
+    """
+
+    def __init__(self, matrix):
+        # Build normal equations related to matrix
+        m, n = matrix.shape
+
+        if m >= n:
+            matrix = matrix.H @ matrix
+        else:
+            matrix = matrix @ matrix.H
+
+        super().__init__(matrix, def_pos=True)
