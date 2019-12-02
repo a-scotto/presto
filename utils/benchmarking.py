@@ -16,295 +16,303 @@ import numpy
 import pickle
 import fnmatch
 import scipy.sparse
+import scipy.optimize
 
-from core.linear_operator import LinearOperator
-from core.random_subspace import RandomSubspaceFactory
+from core.linear_operator import SelfAdjointMatrix
 from core.linear_system import ConjugateGradient, LinearSystem
-from core.preconditioner import LimitedMemoryPreconditioner, Preconditioner
+from core.projection_subspace import RandomSubspaceFactory, KrylovSubspaceFactory
+from core.preconditioner import LimitedMemoryPreconditioner, AlgebraicPreconditionerFactory
 
 
-def read_setup(OPERATOR_ROOT_PATH: str, SETUP_FILE_PATH: str) -> dict:
+OPERATORS_ROOT_PATH = 'operators/'
+REFERENCES_RUN_ROOT_PATH = 'runs/'
+REPORTS_ROOT_PATH = 'reports/'
+
+MAX_BUDGET_RATIO = 8*100
+
+
+def process_precond_data(precond_parameters: str) -> dict:
+    """
+    Method to process data concerning the preconditioner in setup text file lines.
+
+    :param precond_parameters: Parameters of the preconditioner to benchmark.
+    """
+
+    subspace, first_level_precond = precond_parameters.split(',')
+
+    # Retrieve subspace information
+    try:
+        subspace_type, parameters = subspace.split(':')
+
+        # Check if parameters is a float
+        try:
+            parameters = float(parameters)
+        except ValueError:
+            pass
+
+    except ValueError:
+        subspace_type = subspace
+        parameters = None
+
+    subspace = dict(type=subspace_type, parameters=parameters)
+
+    return dict(subspace=subspace, first_level_precond=first_level_precond)
+
+
+def process_benchmark_data(benchmark_data: str) -> dict:
+    """
+    Method to process data concerning the benchmark in setup text file lines.
+
+    :param benchmark_data: Data of the benchmark itself.
+    """
+
+    n_tests, n_subspaces = benchmark_data.split(',')
+
+    return dict(n_tests=int(n_tests), n_subspaces=int(n_subspaces))
+
+
+def process_operators_data(operators_data: str) -> dict:
+    """
+    Method to process data concerning the operators in setup text file lines.
+
+    :param operators_data: Data of the operators to benchmark on.
+    """
+
+    operators_list = os.listdir(OPERATORS_ROOT_PATH)
+    operators_list = fnmatch.filter(operators_list, '*.opr')
+
+    if operators_data == '*':
+        operators = [os.path.join(OPERATORS_ROOT_PATH, op) for op in operators_list]
+
+    else:
+        operators = [os.path.join(OPERATORS_ROOT_PATH, op + '.opr')
+                     for op in operators_data.split(',')
+                     if op + '.opr' in operators_list]
+
+    return dict(operators=operators)
+
+
+def read_setup(SETUP_FILE_PATH: str) -> list:
     """
     Method to read the benchmark setup text file and return the different setup in a suitable
     format to run the benchmark.
 
-    :param OPERATOR_ROOT_PATH: Path of folder containing the operators.
     :param SETUP_FILE_PATH: Path of the setup text file.
     """
 
-    # Get the list of all available operators in OPERATOR_ROOT_PATH folder
-    operators_list = os.listdir(OPERATOR_ROOT_PATH)
-    operators_list = fnmatch.filter(operators_list, '*.opr')
-
-    # Initialize the dictionary
-    setups = dict()
+    # Initialize the list of benchmarks
+    benchmarks = list()
 
     # Read the setup text file
     with open(SETUP_FILE_PATH, 'r') as setup_text_file:
-        # Get the list of text lines
-        content = setup_text_file.readlines()
-
-        # Go through all the lines
-        for line in content:
+        for line in setup_text_file.readlines():
             # Skip user dedicated header
             if line.startswith('>'):
                 continue
 
-            # Turn spaced separated data into list
-            operators, n_subspaces, max_ratio, n_tests, sampling = line.split(' ')
+            # Remove useless spacings and newline character
+            line = line.replace(' ', '')
+            line = line.replace('\n', '')
 
-            # Get the sampling method and optionally arguments
-            sampling_method, sampling_parameter = sampling.split(',')
+            precond_data, benchmark_data, operators_data = line.split('|')
 
-            setup = dict(n_subspaces=int(n_subspaces),
-                         max_ratio=float(max_ratio),
-                         n_tests=int(n_tests),
-                         sampling_method=sampling_method,
-                         sampling_parameter=float(sampling_parameter))
+            # Parsing the data
+            precond_data = process_precond_data(precond_data)
+            benchmark_data = process_benchmark_data(benchmark_data)
+            operators = process_operators_data(operators_data)
 
-            # Either add all operators or the desired one to the setups dictionary
-            if operators == '*':
-                for operator in operators_list:
-                    OPERATOR_PATH = os.path.join(OPERATOR_ROOT_PATH, operator)
+            # Merge data
+            benchmark_setup = dict(**precond_data, **benchmark_data, **operators)
 
-                    # Append the operator path if already existing, else create the list
-                    try:
-                        setups[OPERATOR_PATH].append(setup)
-                    except KeyError:
-                        setups[OPERATOR_PATH] = [setup]
-            else:
-                operators = operators + '.opr'
-                OPERATOR_PATH = os.path.join(OPERATOR_ROOT_PATH, operators)
+            benchmarks.append(benchmark_setup)
 
-                if operators not in operators_list:
-                    raise FileNotFoundError('Not such operator file {}.'.format(OPERATOR_PATH))
-
-                # Append the operator path if already existing, else create the list
-                try:
-                    setups[OPERATOR_PATH].append(setup)
-                except KeyError:
-                    setups[OPERATOR_PATH] = [setup]
-
-    return setups
+    return benchmarks
 
 
-def set_reference_run(REFERENCE_RUN_PATH: str,
-                      lin_op: LinearOperator,
-                      precond: Preconditioner,
-                      n_runs: int = 100) -> ConjugateGradient:
+def compute_subspace_sizes(n_subspaces: int,
+                           linear_operator: scipy.sparse.spmatrix,
+                           subspace_type: str = 'dense') -> numpy.asarray:
     """
-    Method to run the Conjugate Gradient a given number of times, to select the left-hand side
-    corresponding to the average run.
+    Method to compute the list of subspaces size to be tested, regarding the number of size to be
+    tested, the order of the linear operator, and the type of subspace either dense or sparse.
 
-    :param REFERENCE_RUN_PATH: Path to store the results.
-    :param lin_op: LinearOperator object to run the Conjugate Gradient on.
+    :param n_subspaces: Number of subspaces to test.
+    :param linear_operator: Linear operator tested.
+    :param subspace_type: Either dense or sparse leading to a different cost computation.
+    """
+
+    # Initialise parameters
+    n, _ = linear_operator.shape
+    a = linear_operator.size
+
+    # Maximum budget
+    budget = MAX_BUDGET_RATIO * n
+
+    # Compute the maximum subspace size depending of the subspace type
+    if subspace_type == 'dense':
+        k_max = budget / (8 * n)
+    elif subspace_type == 'sparse':
+        k_max = scipy.optimize.fsolve(lambda k: 4*k**2 + 4*a + n - budget, x0=n)
+    else:
+        raise ValueError('Subspace type must be either dense or sparse.')
+
+    step = float(k_max / n_subspaces)
+    subspace_sizes = numpy.asarray([(i + 1) * step for i in range(n_subspaces)], dtype=numpy.int32)
+
+    return subspace_sizes
+
+
+def set_reference_run(operator: dict, precond: str, n_runs: int = 100) -> ConjugateGradient:
+    """
+    Method to run the Conjugate Gradient a representative number of times, to select the right-hand 
+    side corresponding to the average run.
+
+    :param operator: LinearOperator object to run the Conjugate Gradient on.
     :param precond: First-level preconditioner to run the CG with.
     :param n_runs: Number of runs to compute the average on.
     """
 
-    # Either load left-hand side from existing file or compute it
-    try:
-        with open(REFERENCE_RUN_PATH, 'rb') as file:
-            reference_run = pickle.Unpickler(file).load()
+    # Initialize parameters
+    n, _ = operator['shape']
+    PATH = os.path.join(REFERENCES_RUN_ROOT_PATH, operator['name'] + '.ref')
 
-    except OSError:
-        # Set a CG run of reference
-        lhs = list()
-        n_iterations = list()
+    if not os.path.isfile(PATH):
+        with open(PATH, 'wb') as file:
+            pickle.Pickler(file).dump(dict())
 
-        # Run the CG with several left-hand sides
-        for i in range(n_runs):
-            # Create random left-hand side
-            y = numpy.random.randn(lin_op.shape[0], 1)
-            lin_sys = LinearSystem(lin_op, lin_op.dot(y))
+    with open(PATH, 'rb') as file:
+        operators_run = pickle.Unpickler(file).load()
 
-            # Run the Conjugate Gradient
-            cg = ConjugateGradient(lin_sys, x_0=None, M=precond)
-            cg.run()
+        if precond not in operators_run.keys():
+            # Set a CG run of reference
+            rhs = list()
+            iterations = list()
+            lin_op = SelfAdjointMatrix(operator['operator'], def_pos=True)
+            M = AlgebraicPreconditionerFactory(lin_op).get(precond)
 
-            # Store results
-            lhs.append(lin_sys.lhs)
-            n_iterations.append(cg.output['n_iterations'])
+            # Run the CG with several left-hand sides
+            for i in range(n_runs):
+                # Create random linear system
+                lin_sys = LinearSystem(lin_op, lin_op.dot(numpy.random.randn(n, 1)))
 
-        # Get the index of the average run
-        n_iterations = numpy.asarray(n_iterations)
-        average_run = int(numpy.argmin(numpy.abs(n_iterations - numpy.mean(n_iterations))))
+                # Run the Conjugate Gradient
+                cg = ConjugateGradient(lin_sys, x_0=None, M=M)
+                cg.run()
 
-        # Set the average linear system
-        lin_sys = LinearSystem(lin_op, lhs[average_run])
+                # Store results
+                rhs.append(lin_sys.rhs)
+                iterations.append(cg.output['n_iterations'])
 
-        # Run the Conjugate Gradient on this average linear system
-        reference_run = ConjugateGradient(lin_sys,
-                                          x_0=None,
-                                          M=precond,
-                                          tol=1e-8,
-                                          arnoldi=True,
-                                          buffer=numpy.Inf)
-        reference_run.run()
+            # Get the index of the average run
+            n_iterations = numpy.asarray(iterations)
+            average_run = int(numpy.argmin(numpy.abs(n_iterations - numpy.mean(n_iterations))))
 
-        # Save results obtained
-        with open(REFERENCE_RUN_PATH, 'wb') as file:
-            pickle.Pickler(file).dump(reference_run)
+            # Set the average linear system
+            lin_sys = LinearSystem(lin_op, rhs[average_run])
 
-    return reference_run
+            # Run the Conjugate Gradient on this average linear system
+            reference_cg = ConjugateGradient(lin_sys, x_0=None, M=M, arnoldi=True, buffer=numpy.Inf)
+            reference_cg.run()
+
+            operators_run[precond] = reference_cg
+
+            # Save results obtained
+            with open(PATH, 'wb') as new_file:
+                pickle.Pickler(new_file).dump(operators_run)
+
+    return operators_run[precond]
 
 
-def initialize_report(operator: dict, setup: dict) -> str:
+def initialize_report(operator: dict, setup: dict, reference: ConjugateGradient) -> str:
     """
     Method to create a report file and write the header.
 
     :param operator: dictionary containing the operator to benchmark on and its metadata.
     :param setup: dictionary containing the setup parameters.
+    :param reference: ConjugateGradient object with convergence data of the reference run.
     """
     # Date and time fore report identification
     date_ = ''.join(time.strftime("%x").split('/'))
     time_ = ''.join(time.strftime("%X").split(':'))
 
     # Sampling method and its parameters
-    sampling = setup['sampling_method'] + str(setup['sampling_parameter'])
+    sampling = setup['subspace']['type'] + '#' + str(setup['subspace']['parameters'])
 
     # Set the report name
-    report_name = '_'.join([operator['name'], date_, time_, sampling])
+    report_name = '_'.join([operator['name'], date_, time_, sampling]) + '.rpt'
+
+    print(report_name)
 
     # Aggregate metadata of both the operator tested and the benchmark itself
-    operator_metadata = '#'.join([str(operator['rank']),
+    operator_metadata = ', '.join([str(operator['rank']),
                                   str(operator['non_zeros']),
                                   str(operator['conditioning']),
                                   operator['source']])
 
-    benchmark_metadata = '#'.join([setup['first_lvl_preconditioner'],
-                                   str(setup['reference']),
-                                   str(setup['sampling_parameter'])])
+    benchmark_metadata = ', '.join([setup['first_level_precond'],
+                                   str(reference.output['n_iterations']),
+                                   str(setup['subspace']['type']),
+                                    str(setup['subspace']['parameters'])])
 
     # Header writing
     with open('reports/' + report_name, 'w') as report_file:
         report_file.write('>>   REPORT OF PRECONDITIONING STRATEGIES BENCHMARK   << \n')
         report_file.write('> \n')
-        report_file.write('>  SOLVER ................. Conjugate Gradient \n')
-        report_file.write('>  NUMBER OF TESTS ........ ' + str(setup['n_subspaces']) + '\n')
-        report_file.write('>  RUNS PER TEST .......... ' + str(setup['n_tests']) + '\n')
-        report_file.write('>  MINIMAL SUBSPACE SIZE .. ' + str(setup['sto_subspaces'][0]) + '\n')
-        report_file.write('>  MAXIMAL SUBSPACE SIZE .. ' + str(setup['sto_subspaces'][-1]) + '\n')
-        report_file.write('>  PROBLEM NAME ........... ' + operator['name'] + '\n')
-        report_file.write('>  REFERENCE RUN ...........' + str(setup['reference']) + '\n')
+        report_file.write('>  SOLVER ............. Conjugate Gradient \n')
+        report_file.write('>  SUBSPACES TESTED ... ' + str(setup['n_subspaces']) + '\n')
+        report_file.write('>  RUNS ............... ' + str(setup['n_tests']) + '\n')
+        report_file.write('>  PROBLEM NAME ....... ' + operator['name'] + '\n')
+        report_file.write('>  REFERENCE RUN ...... ' + str(reference.output['n_iterations']) + '\n')
         report_file.write('> \n')
         report_file.write('>>>>>>>>>>>>>>>>>>>>>>>>>>>><<<<<<<<<<<<<<<<<<<<<<<<<<<< \n')
-        report_file.write('~operator_metadata#' + operator_metadata + '\n')
-        report_file.write('~benchmark_metadata#' + benchmark_metadata + '\n')
+        report_file.write('~operator_metadata: ' + operator_metadata + '\n')
+        report_file.write('~benchmark_metadata: ' + benchmark_metadata + '\n')
         report_file.write('>>>>>>>>>>>>>>>>>>>>>>>>>>>><<<<<<<<<<<<<<<<<<<<<<<<<<<< \n')
 
     return report_name
 
 
-def benchmark(reference_run: ConjugateGradient, setup: dict) -> None:
+def benchmark(setup: dict,
+              subspaces: list,
+              reference: ConjugateGradient) -> None:
     """
     Process the benchmark of an operator with the specification contained in the setup
     dictionary. Compare the operator to a reference run and store the results in text file.
-
-    :param reference_run: ConjugateGradient object meant to be the reference to compare with.
-    :param setup: Dictionary with parameters of the benchmark.
+    
+    :param setup: Dictionary with benchmark parameters.
+    :param subspaces: List of subspaces size to test.
+    :param reference: ConjugateGradient object meant to be the reference to compare with.
     """
 
-    # Get LinearOperator and Preconditioner from the reference run
-    lin_op = reference_run.lin_sys.lin_op
-    first_level_precond = reference_run.M_i
+    # Initialize variables
+    lin_sys = reference.lin_sys
+    lin_op = lin_sys.lin_op
+    first_level_precond = reference.M_i
     n, _ = lin_op.shape
 
-    # Run another Conjugate Gradient to build a non-informed LMP
-    lin_sys_lmp_det = LinearSystem(lin_op, lin_op.dot(numpy.random.randn(n, 1)))
-    cg = ConjugateGradient(lin_sys_lmp_det,
-                           x_0=None,
-                           M=first_level_precond,
-                           tol=1e-5,
-                           arnoldi=True,
-                           buffer=numpy.Inf)
-    cg.run()
+    # Process the benchmark
+    for k in tqdm.tqdm(subspaces):
+        report_line = '{:4} | '.format(k)
 
-    # Compute the Ritz vectors from the Arnoldi relation, i.e. the tridiagonal matrix
-    _, eig_vectors = numpy.linalg.eig(cg.output['arnoldi'].todense())
-    ritz_vectors = numpy.hstack(cg.output['z']).dot(eig_vectors)
+        # Create the subspace factory producing subspaces of shape (n, k)
+        if setup['subspace']['type'] in KrylovSubspaceFactory.basis:
+            random_lin_sys = LinearSystem(lin_op, lin_op.dot(numpy.random.randn(n, 1)))
+            factory = KrylovSubspaceFactory((n, k), random_lin_sys, M=first_level_precond)
 
-    # Initialize variables to avoid code inspection troubles
-    k_det, k_sto = None, None
-    best_score, worst_score = numpy.Inf, 0.
-    best_subspace, worst_subspace = None, None
-    directions_subspace, ritz_subspace = None, None
+        elif setup['subspace']['type'] in RandomSubspaceFactory.samplings:
+            factory = RandomSubspaceFactory((n, k))
+        else:
+            raise ValueError('Subspace type unrecognized.')
 
-    # Test all the subspace sizes provided
-    for i in tqdm.tqdm(range(setup['n_subspaces'])):
+        for i in range(setup['n_tests']):
+            subspace = factory.get(setup['subspace']['type'], setup['subspace']['parameters'])
+            lmp = LimitedMemoryPreconditioner(lin_op, subspace, M=first_level_precond)
 
-        # Deterministic reporting
-        k_det = setup['det_subspaces'][i]
-        deterministic_report = list()
+            cg = ConjugateGradient(lin_sys, x_0=None, M=lmp)
+            cg.run()
 
-        # LMP with the k_det first informed descent directions
-        directions_subspace = numpy.hstack(reference_run.output['p'][:k_det])
-        lmp_det = LimitedMemoryPreconditioner(lin_op, directions_subspace, M=first_level_precond)
-        pcg = ConjugateGradient(reference_run.lin_sys, x_0=None, M=lmp_det)
-        pcg.run()
+            report_line += str(cg.output['n_iterations'] / reference.output['n_iterations']) + ','
 
-        deterministic_report.append(str(pcg.output['n_iterations'] / setup['reference']))
-
-        # LMP with the k_det first non-informed Ritz vectors
-        ritz_subspace = ritz_vectors[:, :k_det]
-        lmp_det = LimitedMemoryPreconditioner(lin_op, ritz_subspace, M=first_level_precond)
-        pcg = ConjugateGradient(reference_run.lin_sys, x_0=None, M=lmp_det)
-        pcg.run()
-
-        deterministic_report.append(str(pcg.output['n_iterations'] / setup['reference']))
-
-        # Finalize deterministic report
-        deterministic_report = str(k_det) + '_' + ','.join(deterministic_report)
-
-        # Stochastic reporting
-        k_sto = setup['sto_subspaces'][i]
-        stochastic_report = list()
-
-        factory = RandomSubspaceFactory((n, k_sto))
-
-        # Run the number of tests specified
-        for j in range(setup['n_tests']):
-            # Generate the subspace from the factory
-            subspace = factory.generate(setup['sampling_method'], setup['sampling_parameter'])
-
-            # Build the LMP from the subspace generated
-            lmp_sto = LimitedMemoryPreconditioner(lin_op, subspace, M=first_level_precond)
-
-            # Run the Preconditioned Conjugate Gradient
-            pcg = ConjugateGradient(reference_run.lin_sys, x_0=None, M=lmp_sto)
-            pcg.run()
-
-            # Add result to the report data line
-            lmp_sto_score = pcg.output['n_iterations'] / setup['reference']
-            stochastic_report.append(str(lmp_sto_score))
-
-            # At last subspace size tested, store the best and worst subspaces
-            if i == setup['n_subspaces'] - 1:
-                if lmp_sto_score > worst_score:
-                    worst_score = lmp_sto_score
-                    worst_subspace = subspace
-
-                if lmp_sto_score < best_score:
-                    best_score = lmp_sto_score
-                    best_subspace = subspace
-
-        # Finalize deterministic report
-        stochastic_report = str(k_sto) + '_' + ','.join(stochastic_report)
-
-        # Remove last coma from report line
-        REPORT_LINE = '#'.join([deterministic_report, stochastic_report])
-
-        # Write data line in report file
-        with open('reports/' + setup['report_path'], 'a') as report_file:
-            report_file.write(REPORT_LINE + '\n')
-
-    # Save the best and worst subspace encountered for further analysis
-    scipy.sparse.save_npz('reports/' + setup['report_path'] + '_worst_' + str(k_sto),
-                          worst_subspace)
-
-    scipy.sparse.save_npz('reports/' + setup['report_path'] + '_best_' + str(k_sto),
-                          best_subspace)
-
-    # Save the corresponding deterministic subspaces with Ritz vectors and descent directions
-    numpy.save('reports/' + setup['report_path'] + '_ritz_' + str(k_det), ritz_subspace)
-    numpy.save('reports/' + setup['report_path'] + '_dir_' + str(k_det), directions_subspace)
+        # Write result in report text file
+        with open(os.path.join(REPORTS_ROOT_PATH, setup['report_name']), 'a') as report_file:
+            report_file.write(report_line[:-1] + '\n')
