@@ -84,17 +84,15 @@ class KrylovSubspaceFactory(object):
 
         cg = ConjugateGradient(self.lin_sys,
                                M=M,
-                               tol=0.,
-                               buffer=self.shape[1],
+                               x_0=None,
+                               tol=1e-6,
+                               buffer=self.shape[0],
                                arnoldi=True)
-
-        cg.maxiter = self.shape[1]
         cg.run()
 
         self.R, self.P, self.Z, self.ritz = self.process(cg)
 
-    @staticmethod
-    def process(cg: ConjugateGradient) -> tuple:
+    def process(self, cg: ConjugateGradient) -> tuple:
         """
         Process the different basis of the Krylov subspace computed during the run of the conjugate
         gradient. Aggregate the A-conjugate, M-conjugate, and M^(-1)-conjugate basis as well as the
@@ -114,23 +112,25 @@ class KrylovSubspaceFactory(object):
 
         return R, P, Z, ritz_vectors
 
-    def get(self, krylov_basis: str) -> numpy.ndarray:
+    def get(self, krylov_basis: str, *args, **kwargs) -> numpy.ndarray:
         """
         Generic method to get the different subspaces possibly
         :param krylov_basis: Name of the Krylov subspace basis required
         """
 
+        n, k = self.shape
+
         if krylov_basis == 'directions':
-            return self.P
+            return self.P[:, :k]
 
         elif krylov_basis == 'residuals':
-            return self.R
+            return self.R[:, :k]
 
         elif krylov_basis == 'precond_residuals':
-            return self.Z
+            return self.Z[:, :k]
 
         elif krylov_basis == 'ritz':
-            return self.ritz
+            return self.ritz[:, :k]
 
         else:
             raise KrylovSubspaceError('Krylov basis {} unknown.'.format(krylov_basis))
@@ -171,7 +171,7 @@ class RandomSubspaceFactory(object):
 
         self.sparse_tol = sparse_tol
 
-    def generate(self, sampling_method: str, *args, **kwargs) -> object:
+    def get(self, sampling_method: str, *args, **kwargs) -> object:
         """
         Generic method to generate subspaces from various distribution.
 
@@ -205,13 +205,14 @@ class RandomSubspaceFactory(object):
 
         # Number of non-zeros elements
         p = int(k + (n - k) * d)
+        p = p - (p % k)
 
         # Random rows selection
-        rows = [i % n for i in range(p)]
+        rows = [i for i in range(n)]
         random.shuffle(rows)
 
         # Random column selection
-        columns = [i % k for i in range(k * (p // k + 1))]
+        columns = [i % k for i in range(p)]
         random.shuffle(columns)
 
         for i in range(p):
