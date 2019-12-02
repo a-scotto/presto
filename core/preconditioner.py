@@ -369,3 +369,27 @@ class LimitedMemoryPreconditioner(Preconditioner):
 
     def _matvec_cost(self):
         return self.cost
+
+
+class AlgebraicPreconditionerFactory(object):
+    """
+    Abstract class for Algebraic preconditioner factory. Allow to get different Preconditioner
+    object depending on the name provided.
+    """
+
+    def __init__(self, lin_op: LinearOperator):
+        self.lin_op = lin_op
+
+    def get(self, preconditioner: str, *args, **kwargs) -> Preconditioner:
+        """
+        Generic method to generate subspaces from various distribution.
+
+        :param preconditioner: Name of the preconditioner to build.
+        :param args: Optional arguments for preconditioner.
+        :param kwargs: Optional name arguments for preconditioner.
+        """
+
+        if preconditioner == 'jacobi':
+            return DiagonalPreconditioner(self.lin_op)
+        else:
+            raise PreconditionerError('This preconditioner name in unrecognized.')
