@@ -37,13 +37,13 @@ class LinearSystem(object):
 
     def __init__(self,
                  lin_op: LinearOperator,
-                 lhs: numpy.ndarray,
+                 rhs: numpy.ndarray,
                  x_sol: numpy.ndarray = None) -> None:
         """
         Constructor of the LinearSystem class.
 
         :param lin_op: LinearOperator involved in the linear system.
-        :param lhs: Left-hand side associated.
+        :param rhs: Left-hand side associated.
         :param x_sol: Optional explicit solution of the linear system if available.
         """
 
@@ -53,21 +53,22 @@ class LinearSystem(object):
 
         self.lin_op = lin_op
 
-        # Sanitize the left-hand side attribute
-        if not isinstance(lhs, numpy.ndarray):
-            raise LinearSystemError('LinearSystem left-hand side must be numpy.ndarray')
+        # Sanitize the right-hand side attribute
+        if not isinstance(rhs, numpy.ndarray):
+            raise LinearSystemError('LinearSystem right-hand side must be numpy.ndarray')
 
-        if lhs.shape[0] != lin_op.shape[1]:
-            raise LinearSystemError('Linear map and left-hand side shapes do not match.')
+        if rhs.shape[0] != lin_op.shape[1]:
+            raise LinearSystemError('Linear map and right-hand side shapes do not match.')
 
         # Initialize the linear system's attributes
-        self.lhs = lhs
-        self.scaling = numpy.linalg.norm(lhs)
+        self.rhs = rhs
+        scaling = numpy.linalg.norm(rhs)
+        self. scaling = scaling if scaling != 0. else 1.
         self.x_sol = x_sol
 
-        self.block = False if self.lhs.shape[1] == 1 else True
+        self.block = False if self.rhs.shape[1] == 1 else True
         self.shape = self.lin_op.shape
-        self.dtype = numpy.find_common_type([self.lin_op.dtype, self.lhs.dtype], [])
+        self.dtype = numpy.find_common_type([self.lin_op.dtype, self.rhs.dtype], [])
 
     def get_residual(self, x: numpy.ndarray):
         """
@@ -76,15 +77,15 @@ class LinearSystem(object):
         :param x: Vector on which the residual is computed.
         """
 
-        return self.lhs - self.lin_op.dot(x)
+        return self.rhs - self.lin_op.dot(x)
 
     def __repr__(self):
         """
         Set the printable linear system representation in a suitable manner.
         """
 
-        _repr = 'Linear system of shape {} with left-hand side of shape {}.'\
-                .format(self.lin_op.shape, self.lhs.shape)
+        _repr = 'Linear system of shape {} with right-hand side of shape {}.'\
+                .format(self.lin_op.shape, self.rhs.shape)
 
         return _repr
 
@@ -118,13 +119,13 @@ class _LinearSolver(object):
         self.lin_sys = lin_sys
 
         # Sanitize the initial guess attribute
-        x_0 = numpy.zeros_like(lin_sys.lhs) if x_0 is None else x_0
+        x_0 = numpy.zeros_like(lin_sys.rhs) if x_0 is None else x_0
 
         if x_0 is not None and not isinstance(x_0, numpy.ndarray):
             raise LinearSolverError('Initial guess x_0 must be a numpy.ndarray.')
 
-        if x_0.shape != lin_sys.lhs.shape:
-            raise LinearSolverError('Shapes of initial guess x_0 and left-hand side b mismatch.')
+        if x_0.shape != lin_sys.rhs.shape:
+            raise LinearSolverError('Shapes of initial guess x_0 and right-hand side b mismatch.')
 
         self.x_0 = numpy.copy(x_0)
         self.x = numpy.zeros_like(x_0)
@@ -359,7 +360,7 @@ class ConjugateGradient(_LinearSolver):
             raise LinearSolverError('Conjugate Gradient only apply to square operators.')
 
         if lin_sys.block:
-            raise LinearSolverError('Conjugate Gradient only apply to simple left-hand side.')
+            raise LinearSolverError('Conjugate Gradient only apply to simple right-hand side.')
 
         self.buffer = buffer
         self.total_cost = 0
@@ -449,7 +450,7 @@ class ConjugateGradient(_LinearSolver):
         Details the Flops counting for one iteration of the Conjugate Gradient.
         """
         
-        n, _ = self.lin_sys.lhs.shape
+        n, _ = self.lin_sys.rhs.shape
 
         total_cost = self.lin_sys.lin_op.apply_cost     # q_k = A * p_k
         total_cost += 4*n + 1                           # alpha_k
@@ -544,7 +545,7 @@ class BlockConjugateGradient(_LinearSolver):
             raise LinearSolverError('Block Conjugate Gradient only apply to square problems.')
 
         if not lin_sys.block:
-            raise LinearSolverError('Block Conjugate Gradient only apply to block left-hand side.')
+            raise LinearSolverError('Block Conjugate Gradient only apply to block right-hand side.')
 
         self.buffer = buffer
         self.total_cost = 0
@@ -628,7 +629,7 @@ class BlockConjugateGradient(_LinearSolver):
         of not yet converged columns and rank deficiency.
         """
 
-        n, k = self.lin_sys.lhs.shape
+        n, k = self.lin_sys.rhs.shape
         r, c = alpha.shape
         total_cost = 0
 
