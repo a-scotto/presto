@@ -13,6 +13,7 @@ import numpy
 import random
 import scipy.stats
 import scipy.sparse
+import scipy.linalg
 
 from core.linear_system import LinearSystem, ConjugateGradient
 from core.preconditioner import Preconditioner, IdentityPreconditioner
@@ -92,7 +93,8 @@ class KrylovSubspaceFactory(object):
 
         self.R, self.P, self.Z, self.ritz = self.process(cg)
 
-    def process(self, cg: ConjugateGradient) -> tuple:
+    @staticmethod
+    def process(cg: ConjugateGradient) -> tuple:
         """
         Process the different basis of the Krylov subspace computed during the run of the conjugate
         gradient. Aggregate the A-conjugate, M-conjugate, and M^(-1)-conjugate basis as well as the
@@ -103,11 +105,11 @@ class KrylovSubspaceFactory(object):
 
         # Stack the descent directions, residuals and preconditioned residuals
         P = numpy.hstack(cg.output['p'])
-        Z = numpy.hstack(cg.output['p'])
-        R = numpy.hstack(cg.output['p'])
+        Z = numpy.hstack(cg.output['z'])
+        R = numpy.hstack(cg.output['r'])
 
         # Compute the Ritz vectors from the tridiagonal matrix of the Arnoldi relation
-        _, eigen_vectors = numpy.linalg.eig(cg.output['arnoldi'].todense())
+        _, eigen_vectors = scipy.linalg.eigh(cg.output['arnoldi'].todense())
         ritz_vectors = Z.dot(eigen_vectors)
 
         return R, P, Z, ritz_vectors
