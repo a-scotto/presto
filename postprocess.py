@@ -11,11 +11,10 @@ Description:
 
 import argparse
 
-from matplotlib import pyplot, rc
+from matplotlib import pyplot
 from core.projection_subspace import RandomSubspaceFactory
 from utils.postprocessing import arrange_report, read_report, process_data, convert_to_dense
 
-# rc('text', usetex=True)
 
 COLORS = ['tab:blue',
           'tab:orange',
@@ -40,13 +39,16 @@ parser.add_argument('-r',
 
 args = parser.parse_args()
 
-# Sort the reports by operator benchmarked
+# Sort the reports by operator tested
 reports = arrange_report(args.reports)
 
 # Go through all the reports
 for operator, REPORT_PATHS in reports.items():
     pyplot.figure()
     pyplot.grid()
+
+    # Initialization for script coherence
+    metadata, subspace_sizes = None, None
 
     # Browse through the reports file names in the report set
     for j, REPORT_PATH in enumerate(REPORT_PATHS):
@@ -58,12 +60,6 @@ for operator, REPORT_PATHS in reports.items():
         if metadata['subspace_type'] in RandomSubspaceFactory.samplings:
             subspace_sizes = convert_to_dense(subspace_sizes, metadata['nnz'], metadata['size'])
 
-        pyplot.hlines(y=metadata['reference'],
-                      xmin=subspace_sizes[0],
-                      xmax=subspace_sizes[-1],
-                      linestyle='dashed',
-                      label='CG with only first-level preconditioner.')
-
         pyplot.errorbar(subspace_sizes,
                         processed_data['mean'] * metadata['reference'],
                         yerr=processed_data['standard_deviation'] * metadata['reference'],
@@ -74,18 +70,25 @@ for operator, REPORT_PATHS in reports.items():
                         elinewidth=0.5,
                         ecolor='k',
                         capsize=2.5,
-                        label=metadata['subspace_type'])
+                        label=metadata['subspace_type'].capitalize())
 
-        # Set corresponding title regarding the comparison criterion
-        plot_title = 'LMP results on $A=$ {}, $n=$ {}, $M=$ {}'\
-            .format(operator, metadata['size'], metadata['first_lvl_preconditioner'].capitalize())
+    # Plot reference line
+    pyplot.hlines(y=metadata['reference'],
+                  xmin=0.,
+                  xmax=subspace_sizes[-1],
+                  linestyle='dashed',
+                  label='PCG with M only.')
 
-        # Add the legend, title, and axis titles
-        pyplot.legend()
-        pyplot.title(plot_title)
-        pyplot.xlabel('Equivalent dense subspace size.')
-        pyplot.ylabel('Preconditioned CG number of iterations.')
-        pyplot.xlim(left=0.)
-        pyplot.ylim(bottom=0.)
+    # Set corresponding title regarding the comparison criterion
+    plot_title = 'LMP results on $A=$ {}, $n=$ {}, $M=$ {}'\
+        .format(operator, metadata['size'], metadata['first_lvl_preconditioner'].capitalize())
+
+    # Add the legend, title, and axis titles
+    pyplot.legend()
+    pyplot.title(plot_title)
+    pyplot.xlabel('Equivalent dense subspace size.')
+    pyplot.ylabel('Preconditioned CG number of iterations.')
+    pyplot.xlim(left=0.)
+    pyplot.ylim(bottom=0.)
 
 pyplot.show()
