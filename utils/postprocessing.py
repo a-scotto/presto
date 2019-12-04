@@ -12,8 +12,6 @@ Description:
 import os
 import numpy
 
-from core.linear_operator import LinearOperator
-
 
 def arrange_report(reports: list) -> dict:
     """
@@ -74,13 +72,13 @@ def read_report(REPORT_PATH: str) -> tuple:
             # Read and store benchmark setup metadata
             elif line.startswith('~benchmark_metadata'):
                 _metadata = line.split(': ')[1]
-                first_lvl_preconditioner, reference, subspace_type, subspace_parameter = _metadata.split(', ')
+                first_lvl_precond, reference, subspace_type, subspace_param = _metadata.split(', ')
 
-                metadata['first_lvl_preconditioner'] = first_lvl_preconditioner
+                metadata['first_lvl_preconditioner'] = first_lvl_precond
                 metadata['reference'] = int(reference)
                 metadata['subspace_type'] = subspace_type
                 try:
-                    metadata['subspace_parameter'] = float(subspace_parameter)
+                    metadata['subspace_parameter'] = float(subspace_param)
                 except ValueError:
                     metadata['subspace_parameter'] = None
 
@@ -101,8 +99,8 @@ def read_report(REPORT_PATH: str) -> tuple:
 
 def convert_to_dense(k: numpy.array, lin_op_size: int, lin_op_order: int) -> numpy.array:
     """
-    Method to convert a sparse subspace size to a dense subspace size keeping the criterion chosen constant (either
-    memory requirements or application cost).
+    Method to convert a sparse subspace size to a dense subspace size keeping the criterion chosen
+    constant (either memory requirements or application cost).
 
     :param k: Sparse subspace size to convert.
     :param lin_op_size: Linear operator involved in the conversion.
@@ -125,8 +123,8 @@ def convert_to_dense(k: numpy.array, lin_op_size: int, lin_op_order: int) -> num
 
 def process_data(data: dict) -> tuple:
     """
-    Method to process the data from a report. Namely, compute statistics if necessary and convert to a suitable format
-    for plots.
+    Method to process the data from a report. Namely, compute statistics if necessary and convert to
+    a suitable format for plots.
 
     :param data: Dictionary of data extracted from a report text file.
     """
