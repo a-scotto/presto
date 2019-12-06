@@ -9,45 +9,40 @@ Created on August 22, 2019 at 14:04.
 Description:
 """
 
-import os
 import pickle
 import fnmatch
 import argparse
 
-from utils.operator import extract
+from utils.operator import TestOperator
 
-OPERATORS_PATH = 'operators/'
 
 # Parse command line argument
 parser = argparse.ArgumentParser()
-parser.add_argument('-f', '--folder',
-                    default=OPERATORS_PATH,
-                    help='Path to folder containing MATLAB format stored matrices.')
+parser.add_argument('-f', '--files',
+                    nargs='*',
+                    help='Path to folder containing stored matrices.')
 
 args = parser.parse_args()
 
 # Filter the content of the folder to select only the .mat files
-operators_files = fnmatch.filter(os.listdir(args.folder), '*.mat')
+operators_files = fnmatch.filter(args.files, '*.*')
 
-for operator_file_name in operators_files:
+for OPERATOR_PATH in operators_files:
 
     # Skip .mat files containing SVD decomposition
-    if operator_file_name.endswith('_SVD.mat'):
+    if OPERATOR_PATH.endswith('_SVD.mat'):
         continue
 
-    operator_path = os.path.join(args.folder, operator_file_name)
+    if not OPERATOR_PATH.endswith('.mat') and not OPERATOR_PATH.endswith('.npz'):
+        continue
 
     # Extract content
-    print('Extracting from {}... '.format(operator_path), end='')
-    operator = extract(operator_path)
+    print('Extracting from {}... '.format(OPERATOR_PATH))
+    operator = TestOperator(OPERATOR_PATH)
     print('Done.')
 
-    with open('operators/' + operator['name'], 'wb') as file:
+    name = operator.get('name')
+
+    with open('operators/' + str(name) + '.opr', 'wb') as file:
         p = pickle.Pickler(file)
         p.dump(operator)
-
-    os.remove(operator_path)
-    try:
-        os.remove(operator_path[:-4] + '_SVD.mat')
-    except FileNotFoundError:
-        pass

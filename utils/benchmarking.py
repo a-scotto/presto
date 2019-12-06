@@ -173,8 +173,8 @@ def set_reference_run(operator: dict, precond: str, n_runs: int = 100) -> Conjug
     """
 
     # Initialize parameters
-    n, _ = operator['shape']
-    PATH = os.path.join(REFERENCES_RUN_ROOT_PATH, operator['name'] + '.ref')
+    n, _ = operator.get('shape')
+    PATH = os.path.join(REFERENCES_RUN_ROOT_PATH, operator.get('name') + '.ref')
 
     if not os.path.isfile(PATH):
         with open(PATH, 'wb') as file:
@@ -187,7 +187,7 @@ def set_reference_run(operator: dict, precond: str, n_runs: int = 100) -> Conjug
             # Set a CG run of reference
             rhs = list()
             iterations = list()
-            lin_op = SelfAdjointMatrix(operator['operator'], def_pos=True)
+            lin_op = SelfAdjointMatrix(operator.get('operator'), def_pos=True)
             M = AlgebraicPreconditionerFactory(lin_op).get(precond)
 
             # Run the CG with several left-hand sides
@@ -239,15 +239,15 @@ def initialize_report(operator: dict, setup: dict, reference: ConjugateGradient)
     sampling = setup['subspace']['type'] + '#' + str(setup['subspace']['parameters'])
 
     # Set the report name
-    report_name = '_'.join([operator['name'], date_, time_, sampling]) + '.rpt'
+    report_name = '_'.join([operator.get('name'), date_, time_, sampling]) + '.rpt'
 
     print(report_name)
 
     # Aggregate metadata of both the operator tested and the benchmark itself
-    operator_metadata = ', '.join([str(operator['rank']),
-                                  str(operator['non_zeros']),
-                                  str(operator['conditioning']),
-                                  operator['source']])
+    operator_metadata = ', '.join([str(operator.get('rank')),
+                                  str(operator.get('non_zeros')),
+                                  str(operator.get('conditioning')),
+                                  operator.get('source')])
 
     benchmark_metadata = ', '.join([setup['first_level_precond'],
                                    str(reference.output['n_iterations']),
@@ -261,7 +261,7 @@ def initialize_report(operator: dict, setup: dict, reference: ConjugateGradient)
         report_file.write('>  SOLVER ............. Conjugate Gradient \n')
         report_file.write('>  SUBSPACES TESTED ... ' + str(setup['n_subspaces']) + '\n')
         report_file.write('>  RUNS ............... ' + str(setup['n_tests']) + '\n')
-        report_file.write('>  PROBLEM NAME ....... ' + operator['name'] + '\n')
+        report_file.write('>  PROBLEM NAME ....... ' + operator.get('name') + '\n')
         report_file.write('>  REFERENCE RUN ...... ' + str(reference.output['n_iterations']) + '\n')
         report_file.write('> \n')
         report_file.write('>>>>>>>>>>>>>>>>>>>>>>>>>>>><<<<<<<<<<<<<<<<<<<<<<<<<<<< \n')

@@ -66,7 +66,11 @@ def read_report(REPORT_PATH: str) -> tuple:
 
                 metadata['size'] = int(size)
                 metadata['nnz'] = int(non_zeros)
-                metadata['cond'] = float(conditioning)
+                try:
+                    metadata['cond'] = float(conditioning)
+                except ValueError:
+                    metadata['cond'] = None
+
                 metadata['source'] = source
 
             # Read and store benchmark setup metadata

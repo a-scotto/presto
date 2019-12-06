@@ -31,19 +31,19 @@ for setup in read_setup(args.setup):
         operator = load_operator(operator_path, display=True)
 
         # Scale the operator to enforce 1 lying in the spectrum of the operator
-        u = numpy.random.randn(operator['rank'], 1)
-        gamma = float(u.T.dot(u)) / float(u.T.dot(operator['operator'].dot(u)))
-        operator['operator'] = gamma * operator['operator']
+        u = numpy.random.randn(operator.get('rank'), 1)
+        gamma = float(u.T.dot(u)) / float(u.T.dot(operator.get('operator').dot(u)))
+        operator.set('operator', gamma * operator.get('operator'))
 
         # Compute subspace sizes
         if setup['subspace']['type'] in KrylovSubspaceFactory.basis:
             subspaces = compute_subspace_sizes(setup['n_subspaces'],
-                                               operator['operator'],
+                                               operator.get('operator'),
                                                subspace_type='dense')
 
         elif setup['subspace']['type'] in RandomSubspaceFactory.samplings:
             subspaces = compute_subspace_sizes(setup['n_subspaces'],
-                                               operator['operator'],
+                                               operator.get('operator'),
                                                subspace_type='sparse')
 
         else:
