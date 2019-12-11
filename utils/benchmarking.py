@@ -290,14 +290,15 @@ def benchmark(setup: dict,
     first_level_precond = reference.M_i
     n, _ = lin_op.shape
 
+    krylov_lin_sys = LinearSystem(lin_op, lin_op.dot(numpy.random.randn(n, 1)))
+
     # Process the benchmark
     for k in tqdm.tqdm(subspaces):
         report_line = '{:4} | '.format(k)
 
         # Create the subspace factory producing subspaces of shape (n, k)
         if setup['subspace']['type'] in KrylovSubspaceFactory.basis:
-            random_lin_sys = LinearSystem(lin_op, lin_op.dot(numpy.random.randn(n, 1)))
-            factory = KrylovSubspaceFactory((n, k), random_lin_sys, M=first_level_precond)
+            factory = KrylovSubspaceFactory((n, k), krylov_lin_sys, M=first_level_precond)
 
         elif setup['subspace']['type'] in RandomSubspaceFactory.samplings:
             factory = RandomSubspaceFactory((n, k))
