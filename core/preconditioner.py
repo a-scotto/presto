@@ -197,6 +197,8 @@ class DiagonalPreconditioner(Preconditioner):
         else:
             diag = numpy.diag(matrix_op.matrix)
 
+        diag[diag == 0] += 1
+
         self._diag = scipy.sparse.diags(1 / diag)
 
         super().__init__(matrix_op.shape, matrix_op.dtype, matrix_op)
@@ -391,5 +393,9 @@ class AlgebraicPreconditionerFactory(object):
 
         if preconditioner == 'jacobi':
             return DiagonalPreconditioner(self.lin_op)
+
+        elif preconditioner == 'identity':
+            return IdentityPreconditioner(self.lin_op)
+
         else:
             raise PreconditionerError('This preconditioner name in unrecognized.')
