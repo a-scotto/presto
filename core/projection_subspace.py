@@ -39,7 +39,8 @@ class KrylovSubspaceFactory(object):
     basis = ['directions',
              'residuals',
              'precond_residuals',
-             'ritz']
+             'ritz',
+             'harmonic_ritz']
 
     def __init__(self,
                  shape: tuple,
@@ -91,6 +92,8 @@ class KrylovSubspaceFactory(object):
                                arnoldi=True)
         cg.run()
 
+        self.arnoldi = cg.output['arnoldi'].todense()
+
         self.R, self.P, self.Z, self.ritz = self.process(cg)
 
     @staticmethod
@@ -134,8 +137,30 @@ class KrylovSubspaceFactory(object):
         elif krylov_basis == 'ritz':
             return self.ritz[:, :k]
 
+        elif krylov_basis == 'harmonic_ritz':
+            return self._harmonic_ritz(k)
+
         else:
             raise KrylovSubspaceError('Krylov basis {} unknown.'.format(krylov_basis))
+
+    def _harmonic_ritz(self, k: int) -> numpy.ndarray:
+        """
+        Compute k harmonic Ritz vectors.
+
+        :param k: Number of vectors to compute.
+        """
+
+        H_bar = self.arnoldi[:(k + 1), :k]
+        H_square = self.arnoldi[:k, :k]
+
+        A = H_bar.T @ H_bar
+        B = H_square.T
+
+        _, eigen_vectors = scipy.linalg.eigh(A, B)
+
+        harmonic_ritz_vectors = self.Z[:, :k].dot(eigen_vectors)
+
+        return harmonic_ritz_vectors
 
 
 class RandomSubspaceFactory(object):
