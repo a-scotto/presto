@@ -80,9 +80,9 @@ def read_report(REPORT_PATH: str) -> tuple:
 
                 metadata['first_lvl_preconditioner'] = first_lvl_precond
                 metadata['reference'] = int(reference)
-                metadata['subspace_type'] = subspace_type
+                metadata['subspace_type'] = subspace_type.replace('_', ' ')
                 try:
-                    metadata['subspace_parameter'] = float(subspace_param)
+                    metadata['subspace_parameter'] = subspace_param[:-1]
                 except ValueError:
                     metadata['subspace_parameter'] = None
 

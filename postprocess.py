@@ -60,6 +60,8 @@ for operator, REPORT_PATHS in reports.items():
         if metadata['subspace_type'] in RandomSubspaceFactory.samplings:
             subspace_sizes = convert_to_dense(subspace_sizes, metadata['nnz'], metadata['size'])
 
+        label = metadata['subspace_type'].capitalize() + ': ' + metadata['subspace_parameter']
+
         pyplot.errorbar(subspace_sizes,
                         processed_data['mean'] * metadata['reference'],
                         yerr=processed_data['standard_deviation'] * metadata['reference'],
@@ -70,14 +72,14 @@ for operator, REPORT_PATHS in reports.items():
                         elinewidth=0.5,
                         ecolor='k',
                         capsize=2.5,
-                        label=metadata['subspace_type'].capitalize())
+                        label=label)
 
     # Plot reference line
     pyplot.hlines(y=metadata['reference'],
                   xmin=0.,
                   xmax=subspace_sizes[-1],
                   linestyle='dashed',
-                  label='PCG with M only.')
+                  label='PCG with M alone')
 
     # Set corresponding title regarding the comparison criterion
     plot_title = 'LMP results on $A=$ {}, $n=$ {}, $M=$ {}'\
