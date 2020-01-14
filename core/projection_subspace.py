@@ -36,47 +36,39 @@ class KrylovSubspaceFactory(object):
     Abstract class for a Krylov subspace factory.
     """
 
-    basis = ['directions',
-             'residuals',
-             'precond_residuals',
-             'ritz',
-             'harmonic_ritz']
+    krylov_type = dict(directions='dense',
+                       residuals='dense',
+                       precond_residuals='dense',
+                       ritz='dense',
+                       harmonic_ritz='dense',
+                       random_xopt='sparse',
+                       random_res='sparse')
 
     def __init__(self,
-                 shape: tuple,
                  lin_sys: LinearSystem,
-                 M: Preconditioner = None,
+                 precond: Preconditioner = None,
                  dtype: object = numpy.float64) -> None:
         """
         Constructor of the RandomSubspaceFactory.
 
-        :param shape: Shape of the subspaces to build.
         :param lin_sys: Linear system to build the Krylov subspace from.
-        :param M: Preconditioner for a potential preconditioned Krylov subspace.
+        :param precond: Preconditioner for a potential preconditioned Krylov subspace.
         :param dtype: Type of the subspace coefficients.
         """
-
-        # Sanitize the shape attribute
-        if not isinstance(shape, tuple) or len(shape) != 2:
-            raise KrylovSubspaceError('Shape must be a tuple of the form (n, p).')
-
-        self.shape = shape
 
         # Sanitize the linear system attribute
         if not isinstance(lin_sys, LinearSystem):
             raise KrylovSubspaceError('KrylovSubspace requires a LinearSystem object.')
 
-        self.lin_sys = lin_sys
+        n, _ = lin_sys.lin_op.shape
 
         # Sanitize the preconditioner attribute
 
-        M = IdentityPreconditioner(lin_sys.lin_op) if M is None else M
+        precond = IdentityPreconditioner(lin_sys.lin_op) if precond is None else precond
 
-        if not isinstance(M, Preconditioner):
+        if not isinstance(precond, Preconditioner):
             raise KrylovSubspaceError('Preconditioned Krylov Subspace requires a Preconditioner '
                                       'object.')
-
-        self.M = M
 
         # Sanitize the dtype attribute
         try:
@@ -84,83 +76,148 @@ class KrylovSubspaceFactory(object):
         except TypeError:
             raise KrylovSubspaceError('dtype provided not understood')
 
-        cg = ConjugateGradient(self.lin_sys,
-                               M=M,
+        cg = ConjugateGradient(lin_sys,
+                               M=precond,
                                x_0=None,
                                tol=1e-6,
-                               buffer=self.shape[0],
+                               buffer=n,
                                arnoldi=True)
         cg.run()
 
+        # Get Arnoldi tridiagonal matrix
         self.arnoldi = cg.output['arnoldi'].todense()
 
-        self.R, self.P, self.Z, self.ritz = self.process(cg)
+        # Get the 3 different basis computed during the run of the Conjugate Gradient
+        self.R = cg.output['residues'][0] * numpy.hstack(cg.output['r'])
+        self.P = cg.output['residues'][0] * numpy.hstack(cg.output['p'])
+        self.Z = cg.output['residues'][0] * numpy.hstack(cg.output['z'])
 
-    @staticmethod
-    def process(cg: ConjugateGradient) -> tuple:
-        """
-        Process the different basis of the Krylov subspace computed during the run of the conjugate
-        gradient. Aggregate the A-conjugate, M-conjugate, and M^(-1)-conjugate basis as well as the
-        Ritz vectors from the tridiagonal matrix.
+        # Get final quantities
+        self.x_opt = cg.output['x_opt']
+        self.final_res = cg.output['residues'][-1]
 
-        :param cg: Conjugate gradient converged to process the krylov subspace built.
-        """
-
-        # Stack the descent directions, residuals and preconditioned residuals
-        P = numpy.hstack(cg.output['p'])
-        Z = numpy.hstack(cg.output['z'])
-        R = numpy.hstack(cg.output['r'])
-
-        # Compute the Ritz vectors from the tridiagonal matrix of the Arnoldi relation
-        _, eigen_vectors = scipy.linalg.eigh(cg.output['arnoldi'].todense())
-        ritz_vectors = Z.dot(eigen_vectors)
-
-        return R, P, Z, ritz_vectors
-
-    def get(self, krylov_basis: str, *args, **kwargs) -> numpy.ndarray:
+    def get(self, krylov_subspace: str, k: int, *args) -> object:
         """
         Generic method to get the different subspaces possibly
-        :param krylov_basis: Name of the Krylov subspace basis required
+
+        :param krylov_subspace: Name of the Krylov subspace basis required.
+        :param k: Size of the subspace to build.
         """
 
-        n, k = self.shape
+        # Sanitize Krylov subspace name parameter
+        if krylov_subspace not in self.krylov_type.keys():
+            raise KrylovSubspaceError('Krylov subspace {} unknown.'.format(krylov_subspace))
 
-        if krylov_basis == 'directions':
+        # Return appropriate subspace
+        if krylov_subspace == 'directions':
             return self.P[:, :k]
 
-        elif krylov_basis == 'residuals':
+        elif krylov_subspace == 'residuals':
             return self.R[:, :k]
 
-        elif krylov_basis == 'precond_residuals':
+        elif krylov_subspace == 'precond_residuals':
             return self.Z[:, :k]
 
-        elif krylov_basis == 'ritz':
-            return self.ritz[:, :k]
+        elif krylov_subspace == 'ritz':
+            return self._ritz(k, *args)
 
-        elif krylov_basis == 'harmonic_ritz':
-            return self._harmonic_ritz(k)
+        elif krylov_subspace == 'harmonic_ritz':
+            return self._harmonic_ritz(k, *args)
 
+        elif krylov_subspace == 'random_xopt':
+            return self._random_x_opt(k)
+
+        elif krylov_subspace == 'random_res':
+            return self._random_res(k)
+
+    def _ritz(self, k: int, loc: str) -> numpy.ndarray:
+        """
+        Compute k Ritz vectors located at the upper or lower part of the spectrum.
+
+        :param k: Number of Ritz vectors to compute.
+        :param loc: Either 'upper' or 'lower' part of the spectral approximation.
+        """
+
+        # Compute the Ritz vectors from the tridiagonal matrix of the Arnoldi relation
+        _, eigen_vectors = scipy.linalg.eigh(self.arnoldi)
+        ritz_vectors = self.Z.dot(eigen_vectors)
+
+        if loc == 'lower':
+            ritz_vectors = ritz_vectors[:, -k:]
+        elif loc == 'upper':
+            ritz_vectors = ritz_vectors[:, :k]
         else:
-            raise KrylovSubspaceError('Krylov basis {} unknown.'.format(krylov_basis))
+            raise ValueError('Unknown localization parameter {}'.format(loc))
 
-    def _harmonic_ritz(self, k: int) -> numpy.ndarray:
+        return ritz_vectors
+
+    def _harmonic_ritz(self, k: int, loc: str) -> numpy.ndarray:
         """
-        Compute k harmonic Ritz vectors.
+        Compute k harmonic Ritz vectors located at the upper or lower part of the spectrum.
 
-        :param k: Number of vectors to compute.
+        :param k: Number of harmonic Ritz vectors to compute.
+        :param loc: Either 'upper' or 'lower' part of the spectral approximation.
         """
 
-        H_bar = self.arnoldi[:(k + 1), :k]
-        H_square = self.arnoldi[:k, :k]
+        e = numpy.zeros((1, self.arnoldi.shape[0]))
+        e[0, -1] = self.final_res
+
+        H_bar = numpy.vstack([self.arnoldi, e])
+        H_square = self.arnoldi
 
         A = H_bar.T @ H_bar
         B = H_square.T
 
         _, eigen_vectors = scipy.linalg.eigh(A, B)
 
-        harmonic_ritz_vectors = self.Z[:, :k].dot(eigen_vectors)
+        harmonic_ritz_vectors = self.Z.dot(eigen_vectors)
+
+        if loc == 'lower':
+            harmonic_ritz_vectors = harmonic_ritz_vectors[:, -k:]
+        elif loc == 'upper':
+            harmonic_ritz_vectors = harmonic_ritz_vectors[:, :k]
+        else:
+            raise ValueError('Unknown localization parameter {}'.format(loc))
 
         return harmonic_ritz_vectors
+
+    def _random_x_opt(self, k: int) -> scipy.sparse.spmatrix:
+        """
+        Process a random subspace decomposition of linear system solution x_opt.
+
+        :param k: Size of the random subspace to decompose x_opt on.
+        """
+        # Initialize subspace in lil format to allow easy update
+        n = self.x_opt.size
+        subspace = scipy.sparse.lil_matrix((n, k))
+
+        # Random indexes
+        index = [i for i in range(n)]
+        random.shuffle(index)
+
+        for i in range(n):
+            subspace[index[i], i % k] = self.x_opt[i]
+
+        return subspace.tocsc()
+
+    def _random_res(self, k: int) -> scipy.sparse.spmatrix:
+        """
+        Process a random subspace decomposition of linear system solution x_opt.
+
+        :param k: Size of the random subspace to decompose x_opt on.
+        """
+        # Initialize subspace in lil format to allow easy update
+        n = self.x_opt.size
+        subspace = scipy.sparse.lil_matrix((n, k))
+
+        # Random indexes
+        index = [i for i in range(n)]
+        random.shuffle(index)
+
+        for i in range(n):
+            subspace[index[i], i % k] = self.R[i, -1]
+
+        return subspace.tocsc()
 
 
 class RandomSubspaceFactory(object):
@@ -168,27 +225,27 @@ class RandomSubspaceFactory(object):
     Abstract class for a RandomSubspace factory.
     """
 
-    samplings = ['binary_sparse',
-                 'gaussian_sparse',
-                 'nystrom']
+    sampling_type = dict(binary_sparse='sparse',
+                         gaussian_sparse='sparse',
+                         nystrom='dense')
 
     def __init__(self,
-                 shape: tuple,
+                 size: int,
                  dtype: object = numpy.float64,
                  sparse_tol: float = 5e-2) -> None:
         """
         Constructor of the RandomSubspaceFactory.
 
-        :param shape: Shape of the subspaces to build.
+        :param size: Size of the subspaces to build.
         :param dtype: Type of the subspace coefficients.
         :param sparse_tol: Tolerance below which a subspace is considered as sparse.
         """
 
-        # Sanitize the shape attribute
-        if not isinstance(shape, tuple) or len(shape) != 2:
-            raise RandomSubspaceError('Shape must be a tuple of the form (n, p).')
+        # Sanitize the size attribute
+        if not isinstance(size, int):
+            raise RandomSubspaceError('Size must be an integer.')
 
-        self.shape = shape
+        self.size = size
 
         # Sanitize the dtype attribute
         try:
@@ -198,97 +255,89 @@ class RandomSubspaceFactory(object):
 
         self.sparse_tol = sparse_tol
 
-    def get(self, sampling_method: str, *args, **kwargs) -> object:
+    def get(self, sampling_method: str, k: int, *args, **kwargs) -> object:
         """
         Generic method to generate subspaces from various distribution.
 
         :param sampling_method: Name of the distribution to the draw the subspace from.
-        :param args: Optional arguments for distributions.
+        :param k: Size of the subspace to build.
         """
 
         if sampling_method == 'binary_sparse':
-            return self._binary_sparse(*args, **kwargs)
+            return self._binary_sparse(k, *args, **kwargs)
 
         elif sampling_method == 'gaussian_sparse':
-            return self._gaussian_sparse(*args, **kwargs)
+            return self._gaussian_sparse(k, *args, **kwargs)
 
         elif sampling_method == 'nystrom':
-            return self._nystrom(*args, **kwargs)
+            return self._nystrom(k, *args, **kwargs)
 
         else:
             raise RandomSubspaceError('Sampling method {} unknown.'.format(sampling_method))
 
-    def _binary_sparse(self, d: float) -> scipy.sparse.csc_matrix:
+    def _binary_sparse(self, k: int, d: float) -> scipy.sparse.csc_matrix:
         """
         Draw a subspace from the Binary Sparse distribution.
 
+        :param k: Size of the subspace to build.
         :param d: Control the sparsity of the subspace. The subspace will contain p = k + d(n - k)
         non-zeros elements.
         """
 
         # Initialize subspace in lil format to allow easy update
-        n, k = self.shape
-        subspace = scipy.sparse.lil_matrix(self.shape)
+        subspace = scipy.sparse.lil_matrix((self.size, k))
 
         # Number of non-zeros elements
-        p = int(k + (n - k) * d)
+        p = int(k + (self.size - k) * d)
         p = p - (p % k)
 
         # Random rows selection
-        rows = [i for i in range(n)]
+        rows = [i for i in range(self.size)]
         random.shuffle(rows)
 
-        # Random column selection
-        columns = [i % k for i in range(p)]
-        random.shuffle(columns)
-
         for i in range(p):
-            subspace[rows[i], columns[i]] = (2 * numpy.random.randint(0, 2) - 1) / numpy.sqrt(p / k)
+            subspace[rows[i], i % k] = (2 * numpy.random.randint(0, 2) - 1) / numpy.sqrt(p / k)
 
         return subspace.tocsc()
 
-    def _gaussian_sparse(self, d: float) -> scipy.sparse.csc_matrix:
+    def _gaussian_sparse(self, k: int, d: float) -> scipy.sparse.csc_matrix:
         """
         Draw a subspace from the Gaussian Sparse distribution.
 
+        :param k: Size of the subspace to build.
         :param d: Control the sparsity of the subspace. The subspace will contain p = k + d(n - k)
         non-zeros elements.
         """
 
         # Initialize subspace in lil format to allow easy update
-        n, k = self.shape
-        subspace = scipy.sparse.lil_matrix(self.shape)
+        subspace = scipy.sparse.lil_matrix((self.size, k))
 
         # Number of non-zeros elements
-        p = int(k + (n - k) * d)
+        p = int(k + (self.size - k) * d)
+        p = p - (p % k)
 
         # Random rows selection
-        rows = [i % n for i in range(p)]
+        rows = [i for i in range(self.size)]
         random.shuffle(rows)
 
-        # Random column selection
-        columns = [i % k for i in range(k * (p // k + 1))]
-        random.shuffle(columns)
-
         for i in range(p):
-            subspace[rows[i], columns[i]] = numpy.random.randn()
+            subspace[rows[i], i % k] = numpy.random.randn()
 
         return subspace.tocsc()
 
-    def _nystrom(self, lin_op: scipy.sparse.spmatrix, p: int = 10) -> numpy.ndarray:
+    def _nystrom(self, k: int, lin_op: scipy.sparse.spmatrix, p: int = 10) -> numpy.ndarray:
         """
         Compute a spectral approximation of the higher singular vectors of a linear operator using
         the Nyström method. It is a stochastic method for low-rank approximation here utilized to
         generate approximate spectral information.
 
+        :param k: Size of the subspace to build.
         :param lin_op : Sparse matrix to process the spectral approximation on.
         :param p: Over-sampling parameter meant to increase the approximation accuracy.
         """
-        # Retrieve the problem dimension
-        n, k = self.shape
 
         # Draw a Gaussian block of appropriate size
-        G = numpy.random.randn(n, k + p)
+        G = numpy.random.randn(self.size, k + p)
 
         # Form the sample matrix Y
         Y = lin_op.dot(G)
