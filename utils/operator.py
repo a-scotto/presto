@@ -67,7 +67,7 @@ class TestOperator(object):
         # Ask for file deletion
         self.ask_for_removal(OPERATOR_FILE_PATH)
 
-    def get(self, attribute: str) -> object:
+    def get(self, attribute: str):
         """
         Getter of the class bridging the gap between the inner dictionary of attribute and external
         usages.
@@ -156,7 +156,7 @@ class TestOperator(object):
         return _repr
 
 
-def load_operator(OPERATOR_FILE_PATH: str, display: bool = True) -> dict:
+def load_operator(OPERATOR_FILE_PATH: str, display: bool = True) -> TestOperator:
     """
     Load the binary operator file located at the specified path and return it as dictionary.
 
