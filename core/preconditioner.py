@@ -280,7 +280,7 @@ class CoarseGridCorrection(Preconditioner):
         self.sparse_subspace = scipy.sparse.isspmatrix(subspace)
 
         if not isinstance(subspace, (numpy.ndarray, numpy.matrix)) and not self.sparse_subspace:
-            raise PreconditionerError('CoarseGridCorrection projection subspace should be either a'
+            raise PreconditionerError('CoarseGridCorrection projection subspace should be either a '
                                       'numpy.ndarray or numpy.matrix or a sparse matrix.')
 
         if subspace.ndim != 2:
