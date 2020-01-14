@@ -14,7 +14,8 @@ import argparse
 
 from utils.operator import load_operator
 from core.projection_subspace import KrylovSubspaceFactory, RandomSubspaceFactory
-from utils.benchmarking import read_setup, compute_subspace_sizes, initialize_report, set_reference_run, benchmark
+from utils.benchmarking import read_setup, compute_subspace_sizes, initialize_report, \
+                               set_reference_run, benchmark
 
 OPERATOR_ROOT_PATH = 'operators/'
 
@@ -36,12 +37,16 @@ for setup in read_setup(args.setup):
         operator.set('operator', gamma * operator.get('operator'))
 
         # Compute subspace sizes
-        if setup['subspace']['type'] in KrylovSubspaceFactory.basis:
+        if setup['subspace']['name'] in KrylovSubspaceFactory.krylov_type.keys():
+            _type = KrylovSubspaceFactory.krylov_type[setup['subspace']['name']]
+
             subspaces = compute_subspace_sizes(setup['n_subspaces'],
                                                operator.get('operator'),
-                                               subspace_type='dense')
+                                               subspace_type=_type)
 
-        elif setup['subspace']['type'] in RandomSubspaceFactory.samplings:
+        elif setup['subspace']['name'] in RandomSubspaceFactory.sampling_type.keys():
+            _type = RandomSubspaceFactory.sampling_type[setup['subspace']['name']]
+
             subspaces = compute_subspace_sizes(setup['n_subspaces'],
                                                operator.get('operator'),
                                                subspace_type='sparse')

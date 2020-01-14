@@ -18,6 +18,7 @@ import fnmatch
 import scipy.sparse
 import scipy.optimize
 
+from utils.operator import TestOperator
 from core.linear_operator import SelfAdjointMatrix
 from core.linear_system import ConjugateGradient, LinearSystem
 from core.projection_subspace import RandomSubspaceFactory, KrylovSubspaceFactory
@@ -42,7 +43,7 @@ def process_precond_data(precond_parameters: str) -> dict:
 
     # Retrieve subspace information
     try:
-        subspace_type, parameters = subspace.split(':')
+        subspace_name, parameters = subspace.split(':')
 
         # Check if parameters is a float
         try:
@@ -51,10 +52,10 @@ def process_precond_data(precond_parameters: str) -> dict:
             pass
 
     except ValueError:
-        subspace_type = subspace
+        subspace_name = subspace
         parameters = None
 
-    subspace = dict(type=subspace_type, parameters=parameters)
+    subspace = dict(name=subspace_name, parameters=parameters)
 
     return dict(subspace=subspace, first_level_precond=first_level_precond)
 
@@ -152,7 +153,7 @@ def compute_subspace_sizes(n_subspaces: int,
     if subspace_type == 'dense':
         k_max = budget / (8 * n)
     elif subspace_type == 'sparse':
-        k_max = scipy.optimize.fsolve(lambda k: 4*k**2 + 4*a + n - budget, x0=n)
+        k_max = scipy.optimize.fsolve(lambda k: 4*k**2 + 4*a + 6*n - budget, x0=n)
     else:
         raise ValueError('Subspace type must be either dense or sparse.')
 
@@ -162,12 +163,12 @@ def compute_subspace_sizes(n_subspaces: int,
     return subspace_sizes
 
 
-def set_reference_run(operator: dict, precond: str, n_runs: int = 100) -> ConjugateGradient:
+def set_reference_run(operator: TestOperator, precond: str, n_runs: int = 100) -> ConjugateGradient:
     """
     Method to run the Conjugate Gradient a representative number of times, to select the right-hand 
     side corresponding to the average run.
 
-    :param operator: LinearOperator object to run the Conjugate Gradient on.
+    :param operator: TestOperator object to run the Conjugate Gradient on.
     :param precond: First-level preconditioner to run the CG with.
     :param n_runs: Number of runs to compute the average on.
     """
@@ -223,11 +224,11 @@ def set_reference_run(operator: dict, precond: str, n_runs: int = 100) -> Conjug
     return operators_run[precond]
 
 
-def initialize_report(operator: dict, setup: dict, reference: ConjugateGradient) -> str:
+def initialize_report(operator: TestOperator, setup: dict, reference: ConjugateGradient) -> str:
     """
     Method to create a report file and write the header.
 
-    :param operator: dictionary containing the operator to benchmark on and its metadata.
+    :param operator: TestOperator containing the operator to benchmark on and its metadata.
     :param setup: dictionary containing the setup parameters.
     :param reference: ConjugateGradient object with convergence data of the reference run.
     """
@@ -236,7 +237,7 @@ def initialize_report(operator: dict, setup: dict, reference: ConjugateGradient)
     time_ = ''.join(time.strftime("%X").split(':'))
 
     # Sampling method and its parameters
-    sampling = setup['subspace']['type'] + '#' + str(setup['subspace']['parameters'])
+    sampling = setup['subspace']['name'] + '#' + str(setup['subspace']['parameters'])
 
     # Set the report name
     report_name = '_'.join([operator.get('name'), date_, time_, sampling]) + '.rpt'
@@ -251,7 +252,7 @@ def initialize_report(operator: dict, setup: dict, reference: ConjugateGradient)
 
     benchmark_metadata = ', '.join([setup['first_level_precond'],
                                    str(reference.output['n_iterations']),
-                                   str(setup['subspace']['type']),
+                                   str(setup['subspace']['name']),
                                     str(setup['subspace']['parameters'])])
 
     # Header writing
@@ -297,16 +298,17 @@ def benchmark(setup: dict,
         report_line = '{:4} | '.format(k)
 
         # Create the subspace factory producing subspaces of shape (n, k)
-        if setup['subspace']['type'] in KrylovSubspaceFactory.basis:
-            factory = KrylovSubspaceFactory((n, k), krylov_lin_sys, M=first_level_precond)
+        if setup['subspace']['name'] in KrylovSubspaceFactory.krylov_type.keys():
+            factory = KrylovSubspaceFactory(krylov_lin_sys, precond=first_level_precond)
 
-        elif setup['subspace']['type'] in RandomSubspaceFactory.samplings:
-            factory = RandomSubspaceFactory((n, k))
+        elif setup['subspace']['name'] in RandomSubspaceFactory.sampling_type.keys():
+            factory = RandomSubspaceFactory(n)
         else:
             raise ValueError('Subspace type unrecognized.')
 
+        # Process the required number of runs
         for i in range(setup['n_tests']):
-            subspace = factory.get(setup['subspace']['type'], setup['subspace']['parameters'])
+            subspace = factory.get(setup['subspace']['name'], k, setup['subspace']['parameters'])
             lmp = LimitedMemoryPreconditioner(lin_op, subspace, M=first_level_precond)
 
             cg = ConjugateGradient(lin_sys, x_0=None, M=lmp)
