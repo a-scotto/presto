@@ -37,14 +37,12 @@ class LinearSystem(object):
 
     def __init__(self,
                  lin_op: LinearOperator,
-                 rhs: numpy.ndarray,
-                 x_sol: numpy.ndarray = None) -> None:
+                 rhs: numpy.ndarray) -> None:
         """
         Constructor of the LinearSystem class.
 
         :param lin_op: LinearOperator involved in the linear system.
         :param rhs: Left-hand side associated.
-        :param x_sol: Optional explicit solution of the linear system if available.
         """
 
         # Sanitize the linear operator attribute
@@ -64,7 +62,6 @@ class LinearSystem(object):
         self.rhs = rhs
         scaling = numpy.linalg.norm(rhs)
         self. scaling = scaling if scaling != 0. else 1.
-        self.x_sol = x_sol
 
         self.block = False if self.rhs.shape[1] == 1 else True
         self.shape = self.lin_op.shape
@@ -108,52 +105,55 @@ class _LinearSolver(object):
         :param lin_sys: Linear system to be solved.
         :param x_0: Initial guess for the linear system solution.
         :param M: Preconditioner to be used to enhance solver convergence.
-        :param tol: Relative tolerance threshold.
-        :param maxiter: Maximum number of iterations affordable.
+        :param tol: Relative tolerance threshold under which the algorithm is stopped.
+        :param maxiter: Maximum number of iterations affordable before stopping the method.
         """
 
-        # Sanitize the linear system attribute
+        # Sanitize the linear system argument
         if not isinstance(lin_sys, LinearSystem):
             raise LinearSolverError('LinearSolver requires a LinearSystem.')
 
         self.lin_sys = lin_sys
 
-        # Sanitize the initial guess attribute
+        # Sanitize the initial guess argument
         x_0 = numpy.zeros_like(lin_sys.rhs) if x_0 is None else x_0
 
         if x_0 is not None and not isinstance(x_0, numpy.ndarray):
             raise LinearSolverError('Initial guess x_0 must be a numpy.ndarray.')
 
         if x_0.shape != lin_sys.rhs.shape:
-            raise LinearSolverError('Shapes of initial guess x_0 and right-hand side b mismatch.')
+            raise LinearSolverError('Shapes of initial guess x_0 and right-hand side mismatch.')
 
         self.x_0 = numpy.copy(x_0)
-        self.x = numpy.zeros_like(x_0)
 
-        # Sanitize the preconditioners attribute
-        if M is None:
-            M = IdentityPreconditioner(lin_sys.lin_op)
+        # Sanitize the preconditioner attribute
+        M = IdentityPreconditioner(lin_sys.lin_op) if M is None else M
 
-        elif isinstance(M, list):
-            for M_i in M:
-                if not isinstance(M_i, Preconditioner):
-                    raise LinearSolverError('Preconditioner must be of type Preconditioner.')
-                if M_i.shape != lin_sys.shape:
-                    raise LinearSolverError('Preconditioner shape do not match with LinearSystem.')
+        if not isinstance(M, Preconditioner):
+            raise LinearSolverError('Preconditioner must be of type Preconditioner.')
 
-        elif isinstance(M, Preconditioner):
-            pass
+        if not (M.lin_op is self.lin_sys.lin_op):
+            raise LinearSolverError('Preconditioner must be related to the linear operator '
+                                    'provided in the linear system.')
 
-        else:
-            raise LinearSystemError('Preconditioner must be None, Preconditioner, or list of '
-                                    'Preconditioner.')
+        self.M = M
 
-        self.M_i = M
+        # Sanitize the tolerance argument
+        if not isinstance(tol, float) or tol < 0:
+            raise LinearSolverError('Tolerance must be a positive real number.')
 
-        # Initialize the linear solver's attributes
         self.tol = tol
+
+        # Sanitize the maximum iteration number argument
+        maxiter = self.x_0.size if maxiter is None else maxiter
+
+        if not isinstance(maxiter, int) or maxiter < 0:
+            raise LinearSolverError('The maximum number of iteration must be a positive integer.')
+
         self.maxiter = maxiter
-        self.monitor = self._initialize()
+
+        # Initialize the solution and the solver monitor
+        self.x = numpy.zeros_like(x_0)
 
     def _initialize(self):
         raise LinearSolverError('LinearSolver must implement a _initialize method.')
@@ -314,65 +314,86 @@ class _SolverMonitor(object):
         else:
             return ret.__iter__()
 
-    def report(self, solver_name: str, initial_res: float, final_res: float) -> str:
-        """
-        Create the report to print once the LinearSolver has achieved its run.
-        
-        :param solver_name: Name of the solver used.
-        :param initial_res: Initial norm of the residual.
-        :param final_res: Final norm of the residual.
-        """
-        
-        string = '{:25}: run of {:4} iteration(s)  |  '.format(solver_name, self.n_it)
-        string += 'Final absolute 2-norm residual = {:1.4e}  |  '.format(final_res)
-        string += 'Relative 2-norm residual reduction = {:1.4e}'.format(final_res / initial_res)
-        return string
-
 
 class ConjugateGradient(_LinearSolver):
     """
-    Abstract class to implement the Conjugate Gradient method with possible use of preconditioner.
+    Abstract class to implement the (Preconditioned) Conjugate Gradient algorithm.
     """
 
     def __init__(self,
                  lin_sys: LinearSystem,
                  x_0: numpy.ndarray = None,
                  M: Preconditioner = None,
-                 tol: float = 1e-5,
-                 buffer: int = 0,
+                 tol: float = 1e-6,
+                 maxiter: int = None,
+                 buffer: int = None,
                  arnoldi: bool = False) -> None:
         """
         Constructor of the ConjugateGradient class.
 
-        :param lin_sys: LinearSystem to solve.
-        :param x_0: Initial guess of the linear system.
-        :param M: Preconditioner to use during the resolution.
-        :param tol: Relative tolerance to achieve before stating convergence.
+        :param lin_sys: Linear system to be solved.
+        :param x_0: Initial guess for the linear system solution.
+        :param M: Preconditioner to be used to enhance solver convergence.
+        :param tol: Relative tolerance threshold under which the algorithm is stopped.
+        :param maxiter: Maximum number of iterations affordable before stopping the method.
         :param buffer: Size of the buffer memory.
         :param arnoldi: Whether or not storing the Arnoldi relation elements.
         """
-        
-        # Sanitize the linear system attribute
+
+        # Instantiate linear solver attributes
+        super().__init__(lin_sys,
+                         x_0=x_0,
+                         M=M,
+                         tol=tol,
+                         maxiter=maxiter)
+
+        # Ensure the linear system lies in the range of the conjugate gradient method
         if not hasattr(lin_sys.lin_op, 'def_pos'):
             raise LinearSolverError('Conjugate Gradient only apply to s.d.p linear operators.')
 
         if lin_sys.lin_op.shape[0] != lin_sys.lin_op.shape[1]:
-            raise LinearSolverError('Conjugate Gradient only apply to square operators.')
+            raise LinearSolverError('Conjugate Gradient only apply to squared operators.')
 
         if lin_sys.block:
             raise LinearSolverError('Conjugate Gradient only apply to simple right-hand side.')
 
+        # Sanitize the buffer size argument
+        buffer = 0 if buffer is None else buffer
+
+        if not isinstance(buffer, int) or buffer < 0:
+            raise LinearSolverError('The buffer size must be a positive integer.')
+
         self.buffer = buffer
+
+        # Initialize computational costs attributes
         self.total_cost = 0
-        self.arnoldi = dict(beta_k=list(), d_k=list(), rho_k=list()) if arnoldi else None
-
-        super().__init__(lin_sys, x_0, M, tol, lin_sys.shape[0])
-
         self.iteration_cost = self._iteration_cost()
 
-        # Sanitize the preconditioner attribute
-        if not isinstance(self.M_i, Preconditioner):
-            raise LinearSolverError('Conjugate Gradient can handle only one preconditioner.')
+        # Sanitize the Arnoldi relation argument
+        self.arnoldi = dict(beta_k=list(), d_k=list(), rho_k=list()) if arnoldi else None
+
+        # Conjugate Gradient method run
+        self.monitor = self._initialize()
+        self._run()
+        self._finalize()
+
+    def _iteration_cost(self) -> float:
+        """
+        Details the FLOPs counting for one iteration of the Conjugate Gradient.
+        """
+
+        n, _ = self.lin_sys.rhs.shape
+
+        total_cost = self.lin_sys.lin_op.apply_cost     # q_k = A * p_k
+        total_cost += 4*n + 1                           # alpha_k
+        total_cost += 2*n                               # x_k
+        total_cost += 2*n                               # r_k
+        total_cost += 2*n                               # ||r_k||
+        total_cost += self.M.apply_cost               # z_k
+        total_cost += 4*n + 1                           # beta
+        total_cost += 2*n                               # p_k
+
+        return total_cost
 
     def _initialize(self) -> _SolverMonitor:
         """
@@ -382,7 +403,7 @@ class ConjugateGradient(_LinearSolver):
         
         # Initialize the algorithm with scaled residual r_0, then z_0 and p_0
         r = self.lin_sys.get_residual(self.x_0) / self.lin_sys.scaling
-        z = self.M_i.apply(r)
+        z = self.M.apply(r)
         p = numpy.copy(z)
         
         # Aggregate as auxiliaries quantities
@@ -390,7 +411,7 @@ class ConjugateGradient(_LinearSolver):
         
         # Compute initial cost and residual norm
         residue = numpy.linalg.norm(r)
-        cost = self.lin_sys.lin_op.apply_cost + self.M_i.apply_cost
+        cost = self.lin_sys.lin_op.apply_cost + self.M.apply_cost
         
         # Aggregate as history quantities
         history = [residue, cost]
@@ -401,79 +422,16 @@ class ConjugateGradient(_LinearSolver):
 
         return _SolverMonitor(history, auxiliaries=auxiliaries, buffer=self.buffer)
 
-    def _finalize(self) -> None:
+    def _run(self) -> None:
         """
-        Finalize the Conjugate Gradient algorithm by post-processing the data aggregated during the 
-        run and making up the output dictionary gathering all the final values.
-        """
-        
-        # Get residuals and iterations cost and scale back the residuals
-        residues, cost = self.monitor.get_history()
-        residues *= self.lin_sys.scaling
-        
-        # Get the available auxiliaries, depending on the buffer content
-        z, p, r = self.monitor.get_auxiliaries()
-        
-        # Make up the report line to print
-        report = self.monitor.report('Conjugate Gradient', residues[0], residues[-1])
-
-        arnoldi = None
-        
-        # Compute the Arnoldi tridiagonal matrix coefficient if it was required
-        if isinstance(self.arnoldi, dict):
-            # Remove last beta_k in case convergence was not reached
-            if len(self.arnoldi['d_k']) == len(self.arnoldi['beta_k']):
-                del self.arnoldi['beta_k'][-1]
-
-            D = scipy.sparse.diags(self.arnoldi['d_k'])
-            N = scipy.sparse.diags(self.arnoldi['rho_k'])
-            B = scipy.sparse.eye(self.monitor.n_it) + scipy.sparse.diags(self.arnoldi['beta_k'],
-                                                                         offsets=1)
-
-            arnoldi = N @ B.T @ D @ B @ N
-        
-        # Make up the output dictionary with all final values
-        output = dict(report=report,
-                      x_opt=self.x_0 + self.x * self.lin_sys.scaling,
-                      n_iterations=self.monitor.n_it,
-                      residues=residues,
-                      arnoldi=arnoldi,
-                      cost=cost,
-                      z=z,
-                      p=p,
-                      r=r)
-
-        self.output = output
-
-    def _iteration_cost(self) -> float:
-        """
-        Details the Flops counting for one iteration of the Conjugate Gradient.
-        """
-        
-        n, _ = self.lin_sys.rhs.shape
-
-        total_cost = self.lin_sys.lin_op.apply_cost     # q_k = A * p_k
-        total_cost += 4*n + 1                           # alpha_k
-        total_cost += 2*n                               # x_k
-        total_cost += 2*n                               # r_k
-        total_cost += 2*n                               # ||r_k||
-        total_cost += self.M_i.apply_cost               # z_k
-        total_cost += 4*n + 1                           # beta
-        total_cost += 2*n                               # p_k
-
-        return total_cost
-
-    def run(self, verbose: bool = False) -> None:
-        """
-        Method to actually run the Conjugate Gradient algorithm. At of the run the end, it update 
-        its own output attribute with the final values found.
+        Run the Conjugate Gradient algorithm.
         """
         
         for k in range(self.maxiter):
             # Get the previous iterates quantities
             z, p, r = self.monitor.get_previous()
             
-            # process the recurrence relations of the Conjugate Gradient
+            # Process the recurrence relations of the Conjugate Gradient
             q_k = self.lin_sys.lin_op.dot(p)
             rho_k = z.T.dot(r)
             d_k = p.T.dot(q_k)
@@ -496,11 +454,11 @@ class ConjugateGradient(_LinearSolver):
                 self.monitor.update([residue, self.total_cost], [])
                 break
 
-            z_k = self.M_i.apply(r_k)
+            z_k = self.M.apply(r_k)
             beta = z_k.T.dot(r_k) / rho_k
             p_k = z_k + beta * p
 
-            # Update the iterated quantities with their new values
+            # Update the historic and vectors quantities with their new values
             self.monitor.update([residue, self.total_cost], [z_k, p_k, r_k])
 
             # Store the elements required to compute the Arnoldi matrix if required
@@ -509,8 +467,60 @@ class ConjugateGradient(_LinearSolver):
                 self.arnoldi['rho_k'].append(float(1 / rho_k**0.5))
                 self.arnoldi['beta_k'].append(float(-beta))
 
-        # Sanitize the output elements
-        self._finalize()
+    def _finalize(self) -> None:
+        """
+        Finalize the Conjugate Gradient algorithm by post-processing the data potentially aggregated
+        during the run and making up the output dictionary gathering all the final values.
+        """
+
+        # Get residuals and iterations cost and scale back the residuals
+        residues, cost = self.monitor.get_history()
+        residues *= self.lin_sys.scaling
+
+        # Get the available auxiliaries, depending on the buffer content
+        z, p, r = self.monitor.get_auxiliaries()
+
+        arnoldi = None
+
+        # Compute the Arnoldi tridiagonal matrix coefficient if it was required
+        if isinstance(self.arnoldi, dict):
+            # Remove last beta_k in case convergence was not reached
+            if len(self.arnoldi['d_k']) == len(self.arnoldi['beta_k']):
+                del self.arnoldi['beta_k'][-1]
+
+            D = scipy.sparse.diags(self.arnoldi['d_k'])
+            N = scipy.sparse.diags(self.arnoldi['rho_k'])
+            B = scipy.sparse.eye(self.monitor.n_it) + scipy.sparse.diags(self.arnoldi['beta_k'],
+                                                                         offsets=1)
+
+            arnoldi = N @ B.T @ D @ B @ N
+
+        # Make up the output dictionary with all final values
+        output = dict(x_opt=self.x_0 + self.x * self.lin_sys.scaling,
+                      n_iterations=self.monitor.n_it,
+                      residues=residues,
+                      arnoldi=arnoldi,
+                      cost=cost,
+                      z=self.lin_sys.scaling * numpy.hstack(z),
+                      p=self.lin_sys.scaling * numpy.hstack(p),
+                      r=self.lin_sys.scaling * numpy.hstack(r))
+
+        self.output = output
+
+    def __repr__(self):
+        """
+        Provide a readable report of the Conjugate Gradient algorithm results.
+        """
+
+        n_iterations = self.output['n_iterations']
+        final_residual = self.output['residues'][-1]
+        residual_decrease = self.output['residues'][-1] / self.output['residues'][0]
+
+        _repr = 'Conjugate Gradient run of: {:4} iteration(s)  |  '.format(n_iterations)
+        _repr += 'Final absolute 2-norm residual = {:1.4e}  |  '.format(final_residual)
+        _repr += 'Relative 2-norm residual reduction = {:1.4e}'.format(residual_decrease)
+
+        return _repr
 
 
 class BlockConjugateGradient(_LinearSolver):
