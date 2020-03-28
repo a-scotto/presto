@@ -18,9 +18,9 @@ from utils.operator import TestOperator
 
 # Parse command line argument
 parser = argparse.ArgumentParser()
-parser.add_argument('-f', '--files',
+parser.add_argument('files',
                     nargs='*',
-                    help='Path to folder containing stored matrices.')
+                    help='Paths to files containing stored matrices.')
 
 args = parser.parse_args()
 
@@ -41,7 +41,7 @@ for OPERATOR_PATH in operators_files:
     operator = TestOperator(OPERATOR_PATH)
     print('Done.')
 
-    name = operator.get('name')
+    name = operator['name']
 
     with open('operators/' + str(name) + '.opr', 'wb') as file:
         p = pickle.Pickler(file)
