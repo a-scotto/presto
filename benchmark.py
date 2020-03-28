@@ -54,4 +54,4 @@ for setup in read_setup(args.setup):
             raise ValueError('Subspace type unrecognized.')
 
         # Process benchmark
-        benchmark = (operator, setup, subspaces)
+        benchmark(operator, setup, subspaces)
