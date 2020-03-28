@@ -12,8 +12,8 @@ Description:
 import argparse
 
 from matplotlib import pyplot
-from core.projection_subspace import RandomSubspaceFactory
-from utils.postprocessing import arrange_report, read_report, process_data, convert_to_dense
+from core.projection_subspace import DeterministicSubspaceFactory, RandomSubspaceFactory
+from utils.postprocessing import arrange_report, convert_to_dense, process_data, read_report
 
 
 COLORS = ['tab:blue',
@@ -31,10 +31,8 @@ MARKER = ['', 'o', 's', '^']
 
 # Parse command line argument
 parser = argparse.ArgumentParser()
-parser.add_argument('-r',
+parser.add_argument('reports',
                     nargs='*',
-                    required=True,
-                    dest='reports',
                     help='Paths of reports text files to post-process.')
 
 args = parser.parse_args()
@@ -57,10 +55,20 @@ for operator, REPORT_PATHS in reports.items():
         # Process the data
         subspace_sizes, processed_data = process_data(data)
 
-        if metadata['subspace_type'] in RandomSubspaceFactory.samplings:
+        if metadata['subspace_type'] in RandomSubspaceFactory.subspace_type.keys():
+            _type = RandomSubspaceFactory.subspace_type[metadata['subspace_type']]
+
+        elif metadata['subspace_type'] in DeterministicSubspaceFactory.subspace_type.keys():
+            _type = DeterministicSubspaceFactory.subspace_type[metadata['subspace_type']]
+
+        else:
+            raise ValueError('Type of subspace not recognized, must be either dense or sparse.')
+
+        if _type == 'sparse':
             subspace_sizes = convert_to_dense(subspace_sizes, metadata['nnz'], metadata['size'])
 
-        label = metadata['subspace_type'].capitalize() + ': ' + metadata['subspace_parameter']
+        label = metadata['subspace_type'].replace('_', ' ').capitalize()
+        label = label + ': ' + metadata['subspace_parameter']
 
         pyplot.errorbar(subspace_sizes,
                         processed_data['mean'] * metadata['reference'],
@@ -83,7 +91,7 @@ for operator, REPORT_PATHS in reports.items():
 
     # Set corresponding title regarding the comparison criterion
     plot_title = 'LMP results on $A=$ {}, $n=$ {}, $M=$ {}'\
-        .format(operator, metadata['size'], metadata['first_lvl_preconditioner'].capitalize())
+        .format(operator, metadata['size'], metadata['first_precond'].capitalize())
 
     # Add the legend, title, and axis titles
     pyplot.legend()
