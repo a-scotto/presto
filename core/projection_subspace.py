@@ -9,13 +9,13 @@ Created on July 04, 2019 at 11:14.
 Description:
 """
 
+import pyamg
 import numpy
-import random
-import scipy.stats
 import scipy.sparse
 import scipy.linalg
 
 from core.linear_system import LinearSystem, ConjugateGradient
+from core.linear_operator import LinearOperator, MatrixOperator
 from core.preconditioner import Preconditioner, IdentityPreconditioner
 
 
@@ -25,114 +25,124 @@ class RandomSubspaceError(Exception):
     """
 
 
-class KrylovSubspaceError(Exception):
+class DeterministicSubspaceError(Exception):
     """
     Exception raised when KrylovSubspace object encounters specific errors.
     """
 
 
-class KrylovSubspaceFactory(object):
+class DeterministicSubspaceFactory(object):
     """
-    Abstract class for a Krylov subspace factory.
+    Abstract class for deterministic subspace factory.
     """
 
-    krylov_type = dict(directions='dense',
-                       residuals='dense',
-                       precond_residuals='dense',
-                       ritz='dense',
-                       harmonic_ritz='dense',
-                       random_xopt='sparse',
-                       random_res='sparse')
+    subspace_type = dict(directions='dense',
+                         ritz='dense',
+                         harmonic_ritz='dense')
 
     def __init__(self,
-                 lin_sys: LinearSystem,
+                 lin_op: MatrixOperator,
                  precond: Preconditioner = None,
+                 rhs: numpy.ndarray = None,
                  dtype: object = numpy.float64) -> None:
         """
-        Constructor of the RandomSubspaceFactory.
+        Constructor of the DeterministicSubspaceFactory.
 
-        :param lin_sys: Linear system to build the Krylov subspace from.
+        :param lin_op: Linear operator to base the deterministic approaches on.
         :param precond: Preconditioner for a potential preconditioned Krylov subspace.
         :param dtype: Type of the subspace coefficients.
         """
 
-        # Sanitize the linear system attribute
-        if not isinstance(lin_sys, LinearSystem):
-            raise KrylovSubspaceError('KrylovSubspace requires a LinearSystem object.')
+        # Sanitize the linear operator argument
+        if not isinstance(lin_op, LinearOperator):
+            raise DeterministicSubspaceError('Linear operator must be of type LinearOperator.')
 
-        n, _ = lin_sys.lin_op.shape
+        self.lin_op = lin_op
+        n, _ = lin_op.shape
 
-        # Sanitize the preconditioner attribute
+        # Sanitize the preconditioner argument
+        self.precond = IdentityPreconditioner(lin_op) if precond is None else precond
 
-        precond = IdentityPreconditioner(lin_sys.lin_op) if precond is None else precond
+        if not isinstance(self.precond, Preconditioner):
+            raise DeterministicSubspaceError('Preconditioner must be of type Preconditioner.')
 
-        if not isinstance(precond, Preconditioner):
-            raise KrylovSubspaceError('Preconditioned Krylov Subspace requires a Preconditioner '
-                                      'object.')
+        # Sanitize the right-hand side argument
+        self.rhs = lin_op.dot(numpy.random.randn(n, 1)) if rhs is None else rhs
+
+        if not isinstance(self.rhs, numpy.ndarray):
+            raise DeterministicSubspaceError('Right-hand side must be of type numpy.ndarray.')
 
         # Sanitize the dtype attribute
         try:
             self.dtype = numpy.dtype(dtype)
         except TypeError:
-            raise KrylovSubspaceError('dtype provided not understood')
+            raise DeterministicSubspaceError('dtype provided not understood')
 
-        cg = ConjugateGradient(lin_sys,
+        cg = ConjugateGradient(LinearSystem(self.lin_op, self.rhs),
                                M=precond,
                                x_0=None,
-                               tol=1e-6,
-                               buffer=n,
+                               tol=1e-10,
+                               maxiter=200,
+                               buffer=200,
                                arnoldi=True)
-        cg.run()
 
         # Get Arnoldi tridiagonal matrix
         self.arnoldi = cg.output['arnoldi'].todense()
 
         # Get the 3 different basis computed during the run of the Conjugate Gradient
-        self.R = cg.output['residues'][0] * numpy.hstack(cg.output['r'])
-        self.P = cg.output['residues'][0] * numpy.hstack(cg.output['p'])
-        self.Z = cg.output['residues'][0] * numpy.hstack(cg.output['z'])
+        self.R = cg.output['r']
+        self.P = cg.output['p']
+        self.Z = cg.output['z']
 
         # Get final quantities
         self.x_opt = cg.output['x_opt']
-        self.final_res = cg.output['residues'][-1]
+        self.final_residual = cg.output['residues'][-1]
 
-    def get(self, krylov_subspace: str, k: int, *args) -> object:
+    def get(self, subspace: str, k: int, *args) -> object:
         """
-        Generic method to get the different subspaces possibly
+        Generic method to get the different deterministic subspaces available.
 
-        :param krylov_subspace: Name of the Krylov subspace basis required.
+        :param subspace: Name of the deterministic subspace to build.
         :param k: Size of the subspace to build.
         """
 
-        # Sanitize Krylov subspace name parameter
-        if krylov_subspace not in self.krylov_type.keys():
-            raise KrylovSubspaceError('Krylov subspace {} unknown.'.format(krylov_subspace))
-
         # Return appropriate subspace
-        if krylov_subspace == 'directions':
-            return self.P[:, :k]
+        if subspace == 'directions':
+            return self._descent_directions(k, *args)
 
-        elif krylov_subspace == 'residuals':
-            return self.R[:, :k]
-
-        elif krylov_subspace == 'precond_residuals':
-            return self.Z[:, :k]
-
-        elif krylov_subspace == 'ritz':
+        elif subspace == 'ritz':
             return self._ritz(k, *args)
 
-        elif krylov_subspace == 'harmonic_ritz':
+        elif subspace == 'harmonic_ritz':
             return self._harmonic_ritz(k, *args)
 
-        elif krylov_subspace == 'random_xopt':
-            return self._random_x_opt(k)
+        elif subspace == 'amg_spectral':
+            return self._amg_spectral(k, *args)
 
-        elif krylov_subspace == 'random_res':
-            return self._random_res(k)
+        else:
+            raise DeterministicSubspaceError('Unknown deterministic subspace name.')
+
+    def _descent_directions(self, k: int, loc: str) -> numpy.ndarray:
+        """
+        Return 'k' descent directions obtained from the run of the Conjugate Gradient. Either the
+        first or the latest obtained depending on the 'loc' parameter.
+
+        :param k: Number of descent directions to return.
+        :param loc: Either select the 'first' or 'last' descent directions computed.
+        """
+
+        if loc == 'first':
+            descent_directions = self.P[:, :k]
+        elif loc == 'last':
+            descent_directions = self.P[:, -k:]
+        else:
+            raise ValueError('Only "first" or "last" descent directions can be provided.')
+
+        return descent_directions
 
     def _ritz(self, k: int, loc: str) -> numpy.ndarray:
         """
-        Compute k Ritz vectors located at the upper or lower part of the spectrum.
+        Compute k Ritz vectors chosen either at the upper or lower part of the spectrum.
 
         :param k: Number of Ritz vectors to compute.
         :param loc: Either 'upper' or 'lower' part of the spectral approximation.
@@ -143,11 +153,11 @@ class KrylovSubspaceFactory(object):
         ritz_vectors = self.Z.dot(eigen_vectors)
 
         if loc == 'lower':
-            ritz_vectors = ritz_vectors[:, -k:]
-        elif loc == 'upper':
             ritz_vectors = ritz_vectors[:, :k]
+        elif loc == 'upper':
+            ritz_vectors = ritz_vectors[:, -k:]
         else:
-            raise ValueError('Unknown localization parameter {}'.format(loc))
+            raise ValueError('Only "lower" or "upper" Ritz spectral approximation can be provided.')
 
         return ritz_vectors
 
@@ -158,66 +168,50 @@ class KrylovSubspaceFactory(object):
         :param k: Number of harmonic Ritz vectors to compute.
         :param loc: Either 'upper' or 'lower' part of the spectral approximation.
         """
+        l, _ = self.arnoldi.shape
+        e = numpy.zeros((l, 1))
+        e[-1, 0] = 1.
 
-        e = numpy.zeros((1, self.arnoldi.shape[0]))
-        e[0, -1] = self.final_res
+        h = self.final_residual
+        f = scipy.linalg.solve(self.arnoldi.T, e)
 
-        H_bar = numpy.vstack([self.arnoldi, e])
-        H_square = self.arnoldi
+        A = self.arnoldi + h**2 * (f @ e.T)
 
-        A = H_bar.T @ H_bar
-        B = H_square.T
-
-        _, eigen_vectors = scipy.linalg.eigh(A, B)
+        _, eigen_vectors = scipy.linalg.eigh(A)
 
         harmonic_ritz_vectors = self.Z.dot(eigen_vectors)
 
         if loc == 'lower':
-            harmonic_ritz_vectors = harmonic_ritz_vectors[:, -k:]
-        elif loc == 'upper':
             harmonic_ritz_vectors = harmonic_ritz_vectors[:, :k]
+        elif loc == 'upper':
+            harmonic_ritz_vectors = harmonic_ritz_vectors[:, -k:]
         else:
-            raise ValueError('Unknown localization parameter {}'.format(loc))
+            raise ValueError('Only "lower" or "upper" harmonic Ritz spectral approximation can be '
+                             'provided.')
 
         return harmonic_ritz_vectors
 
-    def _random_x_opt(self, k: int) -> scipy.sparse.spmatrix:
-        """
-        Process a random subspace decomposition of linear system solution x_opt.
+    def _amg_spectral(self, k: int, heuristic: str):
 
-        :param k: Size of the random subspace to decompose x_opt on.
-        """
-        # Initialize subspace in lil format to allow easy update
-        n = self.x_opt.size
-        subspace = scipy.sparse.lil_matrix((n, k))
+        # Sanitize heuristic argument
+        if heuristic not in ['ruge_stuben', 'smoothed_aggregated', 'rootnode']:
+            raise DeterministicSubspaceError('AMG heuristic {} unknown.'.format(heuristic))
 
-        # Random indexes
-        index = [i for i in range(n)]
-        random.shuffle(index)
+        # Setup multi-grid hierarchical structure with corresponding heuristic
+        if heuristic == 'ruge_stuben':
+            self.amg = pyamg.ruge_stuben_solver(self.lin_op.matrix.tocsr(), max_coarse=k)
 
-        for i in range(n):
-            subspace[index[i], i % k] = self.x_opt[i]
+        elif heuristic == 'smoothed_aggregated':
+            self.amg = pyamg.smoothed_aggregation_solver(self.lin_op.matrix.tocsr(), max_coarse=k)
 
-        return subspace.tocsc()
+        elif heuristic == 'rootnode':
+            self.amg = pyamg.rootnode_solver(self.lin_op.matrix.tocsr(), max_coarse=k)
 
-    def _random_res(self, k: int) -> scipy.sparse.spmatrix:
-        """
-        Process a random subspace decomposition of linear system solution x_opt.
+        S = self.amg.levels[0].P
+        for i in range(1, len(self.amg.levels) - 1):
+            S = S.dot(self.amg.levels[i].P)
 
-        :param k: Size of the random subspace to decompose x_opt on.
-        """
-        # Initialize subspace in lil format to allow easy update
-        n = self.x_opt.size
-        subspace = scipy.sparse.lil_matrix((n, k))
-
-        # Random indexes
-        index = [i for i in range(n)]
-        random.shuffle(index)
-
-        for i in range(n):
-            subspace[index[i], i % k] = self.R[i, -1]
-
-        return subspace.tocsc()
+        return S
 
 
 class RandomSubspaceFactory(object):
@@ -225,35 +219,32 @@ class RandomSubspaceFactory(object):
     Abstract class for a RandomSubspace factory.
     """
 
-    sampling_type = dict(binary_sparse='sparse',
+    subspace_type = dict(binary_sparse='sparse',
                          gaussian_sparse='sparse',
                          nystrom='dense')
 
     def __init__(self,
-                 size: int,
-                 dtype: object = numpy.float64,
-                 sparse_tol: float = 5e-2) -> None:
+                 lin_op: LinearOperator,
+                 dtype: object = numpy.float64) -> None:
         """
         Constructor of the RandomSubspaceFactory.
 
-        :param size: Size of the subspaces to build.
+        :param lin_op: Linear operator to base the deterministic approaches on.
         :param dtype: Type of the subspace coefficients.
-        :param sparse_tol: Tolerance below which a subspace is considered as sparse.
         """
 
-        # Sanitize the size attribute
-        if not isinstance(size, int):
-            raise RandomSubspaceError('Size must be an integer.')
+        # Sanitize the linear operator argument
+        if not isinstance(lin_op, LinearOperator):
+            raise DeterministicSubspaceError('Linear operator must be of type LinearOperator.')
 
-        self.size = size
+        self.lin_op = lin_op
+        self.size, _ = lin_op.shape
 
         # Sanitize the dtype attribute
         try:
             self.dtype = numpy.dtype(dtype)
         except TypeError:
             raise RandomSubspaceError('dtype provided not understood')
-
-        self.sparse_tol = sparse_tol
 
     def get(self, sampling_method: str, k: int, *args, **kwargs) -> object:
         """
@@ -285,20 +276,19 @@ class RandomSubspaceFactory(object):
         """
 
         # Initialize subspace in lil format to allow easy update
-        subspace = scipy.sparse.lil_matrix((self.size, k))
+        subspace = scipy.sparse.dok_matrix((self.size, k))
 
         # Number of non-zeros elements
         p = int(k + (self.size - k) * d)
         p = p - (p % k)
 
-        # Random rows selection
-        rows = [i for i in range(self.size)]
-        random.shuffle(rows)
+        # Subspace fill-in
+        index = numpy.arange(self.size)
+        cols = index % k
+        numpy.random.shuffle(index)
+        subspace[index[:p], cols[:p]] = (2 * numpy.random.randint(0, 2, size=p) - 1)
 
-        for i in range(p):
-            subspace[rows[i], i % k] = (2 * numpy.random.randint(0, 2) - 1) / numpy.sqrt(p / k)
-
-        return subspace.tocsc()
+        return subspace.tocsr() / numpy.sqrt(p / k)
 
     def _gaussian_sparse(self, k: int, d: float) -> scipy.sparse.csc_matrix:
         """
@@ -310,20 +300,19 @@ class RandomSubspaceFactory(object):
         """
 
         # Initialize subspace in lil format to allow easy update
-        subspace = scipy.sparse.lil_matrix((self.size, k))
+        subspace = scipy.sparse.dok_matrix((self.size, k))
 
         # Number of non-zeros elements
         p = int(k + (self.size - k) * d)
         p = p - (p % k)
 
-        # Random rows selection
-        rows = [i for i in range(self.size)]
-        random.shuffle(rows)
+        # Subspace fill-in
+        index = numpy.arange(self.size)
+        cols = index % k
+        numpy.random.shuffle(index)
+        subspace[index[:p], cols[:p]] = numpy.random.randn(p)
 
-        for i in range(p):
-            subspace[rows[i], i % k] = numpy.random.randn()
-
-        return subspace.tocsc()
+        return subspace.tocsr() / numpy.sqrt(p / k)
 
     def _nystrom(self, k: int, lin_op: scipy.sparse.spmatrix, p: int = 10) -> numpy.ndarray:
         """
