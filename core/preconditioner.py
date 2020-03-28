@@ -9,6 +9,7 @@ Created on April 17, 2019 at 13:15.
 Description:
 """
 
+import pyamg
 import numpy
 import scipy.linalg
 import scipy.sparse.linalg
@@ -92,7 +93,7 @@ class _ScaledPreconditioner(Preconditioner):
 
 class _SummedPreconditioner(Preconditioner):
     """
-    Abstract class for summation of preconditioners.
+    Abstract class for summation of preconditioner.
     """
 
     def __init__(self, precond1: Preconditioner, precond2: Preconditioner) -> None:
@@ -126,7 +127,7 @@ class _SummedPreconditioner(Preconditioner):
 
 class _ComposedPreconditioner(Preconditioner):
     """
-    Abstract class for composition of preconditioners.
+    Abstract class for composition of preconditioner.
     """
 
     def __init__(self, precond1: Preconditioner, precond2: Preconditioner) -> None:
@@ -163,7 +164,7 @@ class _ComposedPreconditioner(Preconditioner):
 
 class IdentityPreconditioner(Preconditioner):
     """
-    Abstract class for identity preconditioners.
+    Abstract class for identity preconditioner.
     """
 
     def __init__(self, lin_op: LinearOperator) -> None:
@@ -180,7 +181,7 @@ class IdentityPreconditioner(Preconditioner):
 
 class DiagonalPreconditioner(Preconditioner):
     """
-    Abstract class for Diagonal (Jacobi) preconditioners.
+    Abstract class for Diagonal (Jacobi) preconditioner.
     """
 
     def __init__(self, matrix_op: MatrixOperator) -> None:
@@ -258,9 +259,43 @@ class SymmetricSuccessiveOverRelaxation(Preconditioner):
         return cost
 
 
+class AlgebraicMultiGrid(Preconditioner):
+    """
+    Abstract class for Algebraic Multi-grid (AMG) operators.
+    """
+
+    def __init__(self, matrix: MatrixOperator, heuristic: str = 'ruge_stuben'):
+
+        # Sanitize heuristic argument
+        if heuristic not in ['ruge_stuben', 'rs', 'smoothed_aggregated', 'sa', 'rootnode', 'rn']:
+            raise PreconditionerError('AMG heuristic {} unknown.'.format(heuristic))
+
+        # Setup multi-grid hierarchical structure with corresponding heuristic
+        if heuristic in ['ruge_stuben', 'rs']:
+            self.amg = pyamg.ruge_stuben_solver(matrix.matrix.tocsr(), max_coarse=1000)
+
+        elif heuristic in ['smoothed_aggregated', 'sa']:
+            self.amg = pyamg.smoothed_aggregation_solver(matrix.matrix.tocsr(), max_coarse=1000)
+
+        elif heuristic in ['rootnode', 'rn']:
+            self.amg = pyamg.rootnode_solver(matrix.matrix.tocsr(), max_coarse=1000)
+
+        super().__init__(matrix.shape, matrix.dtype, matrix)
+
+        self.name = 'AMG'
+
+    def _matvec_cost(self):
+        return 0
+
+    def _apply(self, x):
+        y = self.amg.solve(x, tol=1e-15, maxiter=1, cycle='F', accel=None)
+
+        return numpy.atleast_2d(y).T
+
+
 class CoarseGridCorrection(Preconditioner):
     """
-    Abstract class for Coarse-Grid Correction preconditioners. Formally, for a given subspace S, the
+    Abstract class for Coarse-Grid Correction preconditioner. Formally, for a given subspace S, the
     preconditioner is written as:
 
         Q = S * (S^T * A * S)^(-1) * S^T
@@ -388,7 +423,7 @@ class AlgebraicPreconditionerFactory(object):
 
         :param preconditioner: Name of the preconditioner to build.
         :param args: Optional arguments for preconditioner.
-        :param kwargs: Optional name arguments for preconditioner.
+        :param kwargs: Optional named arguments for preconditioner.
         """
 
         if preconditioner == 'jacobi':
@@ -396,6 +431,9 @@ class AlgebraicPreconditionerFactory(object):
 
         elif preconditioner == 'identity':
             return IdentityPreconditioner(self.lin_op)
+
+        elif preconditioner == 'amg':
+            return AlgebraicMultiGrid(self.lin_op, *args, **kwargs)
 
         else:
             raise PreconditionerError('This preconditioner name in unrecognized.')
