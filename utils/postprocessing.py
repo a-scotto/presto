@@ -76,15 +76,15 @@ def read_report(REPORT_PATH: str) -> tuple:
             # Read and store benchmark setup metadata
             elif line.startswith('~benchmark_metadata'):
                 _metadata = line.split(': ')[1]
-                first_lvl_precond, reference, subspace_type, subspace_param = _metadata.split(', ')
+                _metadata = _metadata.split(', ')
 
-                metadata['first_lvl_preconditioner'] = first_lvl_precond
-                metadata['reference'] = int(reference)
-                metadata['subspace_type'] = subspace_type.replace('_', ' ')
-                try:
-                    metadata['subspace_parameter'] = subspace_param[:-1]
-                except ValueError:
-                    metadata['subspace_parameter'] = None
+                metadata['first_precond'] = _metadata[0]
+                metadata['precond_parameter'] = _metadata[1]
+
+                metadata['subspace_type'] = _metadata[2]
+                metadata['subspace_parameter'] = _metadata[3]
+
+                metadata['reference'] = int(_metadata[4])
 
             # Read algorithm runs data
             else:
