@@ -31,16 +31,7 @@ class FileExtensionError(Exception):
 
 class TestOperator(object):
 
-    attributes = ['operator',
-                  'shape',
-                  'rank',
-                  'non_zeros',
-                  'source',
-                  'name',
-                  'conditioning',
-                  'svd']
-
-    def __init__(self, OPERATOR_FILE_PATH: str, user_check: bool = True) -> object:
+    def __init__(self, OPERATOR_FILE_PATH: str, user_check: bool = True) -> None:
         """
 
         :param OPERATOR_FILE_PATH:
@@ -52,13 +43,15 @@ class TestOperator(object):
             raise FileExtractionError('No file at location: {}'.format(OPERATOR_FILE_PATH))
 
         if OPERATOR_FILE_PATH.endswith('.mat'):
-            self.operator = _extract_mat(OPERATOR_FILE_PATH)
+            self.wrapper_content = _extract_mat(OPERATOR_FILE_PATH)
 
         elif OPERATOR_FILE_PATH.endswith('.npz'):
-            self.operator = _extract_npz(OPERATOR_FILE_PATH)
+            self.wrapper_content = _extract_npz(OPERATOR_FILE_PATH)
 
         else:
             print('Format of operator not handled. Pass.')
+
+        self.wrapper_content['rhs'] = self._set_rhs()
 
         # Ask for user checking if required
         if user_check:
@@ -67,7 +60,7 @@ class TestOperator(object):
         # Ask for file deletion
         self.ask_for_removal(OPERATOR_FILE_PATH)
 
-    def get(self, attribute: str):
+    def __getitem__(self, attribute: str):
         """
         Getter of the class bridging the gap between the inner dictionary of attribute and external
         usages.
@@ -76,12 +69,12 @@ class TestOperator(object):
         """
 
         # Process requirements handling case of failure
-        if attribute not in self.attributes:
-            raise ValueError('TestOperator do not have {} attribute.'.format(attribute))
-        else:
-            return self.operator[attribute]
+        if attribute not in self.wrapper_content.keys():
+            raise ValueError('TestOperator do not have "{}" attribute.'.format(attribute))
 
-    def set(self, attribute: str, new_value: object) -> None:
+        return self.wrapper_content[attribute]
+
+    def __setitem__(self, attribute: str, new_value: object) -> None:
         """
         Setter of the class bridging the gap between the inner dictionary of attribute and external
         usages.
@@ -91,23 +84,35 @@ class TestOperator(object):
         """
 
         # Process requirements handling case of failure
-        if attribute not in self.attributes:
+        if attribute not in self.wrapper_content.keys():
             raise ValueError('TestOperator do not have {} attribute.'.format(attribute))
-        if not isinstance(new_value, type(self.operator[attribute])):
+        if not isinstance(new_value, type(self.wrapper_content[attribute])):
             raise ValueError('Attribute {} incorrect type.'.format(attribute))
 
-        self.operator[attribute] = new_value
+        self.wrapper_content[attribute] = new_value
 
-    def user_extraction_check(self):
+    def _set_rhs(self):
+        """
+        Randomly generate a right-hand side of size (n, 1).
+        """
+
+        y = numpy.random.randn(self.wrapper_content['rank'], 1)
+
+        return self.wrapper_content['operator'] @ y
+
+    def user_extraction_check(self) -> None:
         """
         Method to interact with the user so as to check reliability of extraction and potential
         file removals.
         """
 
+        print()
         # Print suitably the metadata extracted
-        for key, val in self.operator.items():
-            print('{}: {}'.format(key, val))
+        for key, val in self.wrapper_content.items():
+            if key not in ['operator', 'rhs']:
+                print('{:12}: {}'.format(key.capitalize(), val))
 
+        print()
         # Ask for user validation
         valid = ''
         while valid not in ['y', 'n']:
@@ -117,7 +122,7 @@ class TestOperator(object):
             raise FileExtractionError
 
     @staticmethod
-    def ask_for_removal(OPERATOR_FILE_PATH: str):
+    def ask_for_removal(OPERATOR_FILE_PATH: str) -> None:
         """
         Method to interact with the user so as to check reliability of extraction and potential
         file removals.
@@ -141,17 +146,17 @@ class TestOperator(object):
 
         try:
             _repr = 'Problem {}: shape {} | Conditioning = {:1.2e} | Density = {:1.2e} | NNZ = {}' \
-                .format(self.operator['name'],
-                        self.operator['shape'],
-                        self.operator['conditioning'],
-                        self.operator['non_zeros'] / self.operator['shape'][0]**2,
-                        self.operator['non_zeros'])
+                .format(self.wrapper_content['name'],
+                        self.wrapper_content['shape'],
+                        self.wrapper_content['conditioning'],
+                        self.wrapper_content['non_zeros'] / self.wrapper_content['shape'][0]**2,
+                        self.wrapper_content['non_zeros'])
         except TypeError:
             _repr = 'Problem {}: shape {} | Density = {:1.2e} | NNZ = {}' \
-                .format(self.operator['name'],
-                        self.operator['shape'],
-                        self.operator['non_zeros'] / self.operator['rank']**2,
-                        self.operator['non_zeros'])
+                .format(self.wrapper_content['name'],
+                        self.wrapper_content['shape'],
+                        self.wrapper_content['non_zeros'] / self.wrapper_content['rank']**2,
+                        self.wrapper_content['non_zeros'])
 
         return _repr
 
@@ -282,10 +287,10 @@ def _extract_npz(OPERATOR_FILE_PATH: str) -> dict:
     operator['name'] = name
 
     # Process the symmetric positive definite character
-    symmetric = input('Is matrix symmetric? [y/n]  ')
+    symmetric = input('Is the matrix symmetric? [y/n]  ')
     operator['symmetric'] = True if symmetric == 'y' else None
 
-    pos_def = input('Is matrix positive-definite? [y/n]  ')
+    pos_def = input('Is the matrix positive-definite? [y/n]  ')
     operator['pos_def'] = True if pos_def == 'y' else None
 
     # Process the SVD decomposition
