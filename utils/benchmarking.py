@@ -244,8 +244,8 @@ def initialize_report(operator: TestOperator, setup: dict, n_iterations: int) ->
     time_ = ''.join(time.strftime("%X").split(':'))
 
     # Sampling method and its parameters
-    sampling = setup['subspace']['name'] + ':' + str(setup['subspace']['parameters'])
-    precond = setup['first_precond']['name'] + ':' + str(setup['first_precond']['parameters'])
+    sampling = setup['subspace']['name'] + '_' + str(setup['subspace']['parameters'])
+    precond = setup['first_precond']['name'] + '_' + str(setup['first_precond']['parameters'])
 
     # Set the report name
     report_name = '_'.join([operator['name'], date_, time_, precond, sampling]) + '.rpt'
@@ -312,12 +312,16 @@ def benchmark(operator: TestOperator, setup: dict, subspaces: list) -> None:
         # Create the subspace factory producing subspaces of shape (n, k)
         if setup['subspace']['name'] in DeterministicSubspaceFactory.subspace_type.keys():
             perturbation = 1e-2
-            mat = operator['operator'] + perturbation * scipy.sparse.eye(n)
-            mat_op = SelfAdjointMatrix(mat, def_pos=True)
-            rhs = operator['rhs'] + perturbation * (2 * numpy.random.rand(n, 1) - 1)
-            precond = AlgebraicPreconditionerFactory(mat_op).get(
-                setup['first_precond']['name'],
-                setup['first_precond']['parameters'])
+
+            # Diagonal perturbation of linear operator
+            mat_op = SelfAdjointMatrix(operator['operator'] + perturbation * scipy.sparse.eye(n), def_pos=True)
+
+            # Perturbation of right-hand side
+            rhs = operator['rhs'] + perturbation * operator['operator'].dot(numpy.random.rand(n, 1))
+
+            precond = AlgebraicPreconditionerFactory(mat_op).get(setup['first_precond']['name'],
+                                                                 setup['first_precond']['parameters'])
+
             factory = DeterministicSubspaceFactory(mat_op, precond=precond, rhs=rhs)
 
         elif setup['subspace']['name'] in RandomSubspaceFactory.subspace_type.keys():
