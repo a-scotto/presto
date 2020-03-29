@@ -317,7 +317,7 @@ def benchmark(operator: TestOperator, setup: dict, subspaces: list) -> None:
             mat_op = SelfAdjointMatrix(operator['operator'] + perturbation * scipy.sparse.eye(n), def_pos=True)
 
             # Perturbation of right-hand side
-            rhs = operator['rhs'] + perturbation * operator['operator'].dot(numpy.random.rand(n, 1))
+            rhs = operator['rhs'] + perturbation * operator['operator'].dot(numpy.random.randn(n, 1))
 
             precond = AlgebraicPreconditionerFactory(mat_op).get(setup['first_precond']['name'],
                                                                  setup['first_precond']['parameters'])
