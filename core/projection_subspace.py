@@ -51,6 +51,7 @@ class DeterministicSubspaceFactory(object):
 
         :param lin_op: Linear operator to base the deterministic approaches on.
         :param precond: Preconditioner for a potential preconditioned Krylov subspace.
+        :param rhs: Right-hand side for potential Krylov subspace construction.
         :param dtype: Type of the subspace coefficients.
         """
 
@@ -221,25 +222,34 @@ class RandomSubspaceFactory(object):
     """
 
     subspace_type = dict(binary_sparse='sparse',
+                         random_split='sparse',
                          gaussian_sparse='sparse',
                          nystrom='dense')
 
     def __init__(self,
                  lin_op: LinearOperator,
+                 rhs: numpy.ndarray,
                  dtype: object = numpy.float64) -> None:
         """
         Constructor of the RandomSubspaceFactory.
 
         :param lin_op: Linear operator to base the deterministic approaches on.
+        :param rhs: Right-hand side for potential random split subspaces.
         :param dtype: Type of the subspace coefficients.
         """
 
         # Sanitize the linear operator argument
         if not isinstance(lin_op, LinearOperator):
-            raise DeterministicSubspaceError('Linear operator must be of type LinearOperator.')
+            raise RandomSubspaceError('Linear operator must be of type LinearOperator.')
 
         self.lin_op = lin_op
         self.size, _ = lin_op.shape
+
+        # Sanitize the right-hand side operator argument
+        if rhs is not None and not isinstance(rhs, numpy.ndarray):
+            raise RandomSubspaceError('Right-hand side must be of type numpy.ndarray.')
+
+        self.rhs = rhs
 
         # Sanitize the dtype attribute
         try:
@@ -257,6 +267,11 @@ class RandomSubspaceFactory(object):
 
         if sampling_method == 'binary_sparse':
             return self._binary_sparse(k)
+
+        elif sampling_method == 'random_split':
+            if self.rhs is None:
+                raise RandomSubspaceError('Random split cannot be done since no right-hand side was provided.')
+            return self._random_split(k)
 
         elif sampling_method == 'gaussian_sparse':
             return self._gaussian_sparse(k)
@@ -289,6 +304,31 @@ class RandomSubspaceFactory(object):
 
         # Fill-in with coefficients in {-1, 1}
         subspace[index, cols] = (2 * numpy.random.randint(0, 2, size=self.size) - 1)
+
+        return subspace.tocsr()
+
+    def _random_split(self, k: int) -> scipy.sparse.csc_matrix:
+        """
+        Draw a subspace from the Binary Sparse distribution.
+
+        :param k: Size of the subspace to build.
+        """
+
+        # Initialize subspace in dok format to allow easy update
+        subspace = scipy.sparse.dok_matrix((self.size, k))
+
+        # Draw columns index and verify corresponding rank consistency
+        cols = numpy.random.randint(k, size=self.size)
+        _, counts = numpy.unique(cols, return_counts=True)
+
+        while len(counts) != k:
+            cols = numpy.random.randint(k, size=self.size)
+            _, counts = numpy.unique(cols, return_counts=True)
+
+        index = numpy.arange(self.size)
+
+        # Fill-in with coefficients in {-1, 1}
+        subspace[index, cols] = self.rhs.reshape(-1)
 
         return subspace.tocsr()
 
