@@ -248,7 +248,7 @@ def initialize_report(operator: TestOperator, setup: dict, n_iterations: int) ->
     precond = setup['first_precond']['name'] + '_' + str(setup['first_precond']['parameters'])
 
     # Set the report name
-    report_name = '_'.join([operator['name'], date_, time_, precond, sampling]) + '.rpt'
+    report_name = '_'.join([operator['name'], precond, sampling, date_, time_]) + '.rpt'
 
     # Aggregate metadata of both the operator tested and the benchmark itself
     operator_metadata = ', '.join([str(operator['rank']),
@@ -325,7 +325,7 @@ def benchmark(operator: TestOperator, setup: dict, subspaces: list) -> None:
             factory = DeterministicSubspaceFactory(mat_op, precond=precond, rhs=rhs)
 
         elif setup['subspace']['name'] in RandomSubspaceFactory.subspace_type.keys():
-            factory = RandomSubspaceFactory(lin_op)
+            factory = RandomSubspaceFactory(lin_op, rhs=operator['rhs'].copy())
         else:
             raise ValueError('Subspace type unrecognized.')
 
