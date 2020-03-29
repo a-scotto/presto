@@ -38,7 +38,8 @@ class DeterministicSubspaceFactory(object):
 
     subspace_type = dict(directions='dense',
                          ritz='dense',
-                         harmonic_ritz='dense')
+                         harmonic_ritz='dense',
+                         amg_spectral='dense')
 
     def __init__(self,
                  lin_op: MatrixOperator,
@@ -255,10 +256,10 @@ class RandomSubspaceFactory(object):
         """
 
         if sampling_method == 'binary_sparse':
-            return self._binary_sparse(k, *args, **kwargs)
+            return self._binary_sparse(k)
 
         elif sampling_method == 'gaussian_sparse':
-            return self._gaussian_sparse(k, *args, **kwargs)
+            return self._gaussian_sparse(k)
 
         elif sampling_method == 'nystrom':
             return self._nystrom(k, *args, **kwargs)
@@ -266,53 +267,55 @@ class RandomSubspaceFactory(object):
         else:
             raise RandomSubspaceError('Sampling method {} unknown.'.format(sampling_method))
 
-    def _binary_sparse(self, k: int, d: float) -> scipy.sparse.csc_matrix:
+    def _binary_sparse(self, k: int) -> scipy.sparse.csc_matrix:
         """
         Draw a subspace from the Binary Sparse distribution.
 
         :param k: Size of the subspace to build.
-        :param d: Control the sparsity of the subspace. The subspace will contain p = k + d(n - k)
-        non-zeros elements.
         """
 
-        # Initialize subspace in lil format to allow easy update
+        # Initialize subspace in dok format to allow easy update
         subspace = scipy.sparse.dok_matrix((self.size, k))
 
-        # Number of non-zeros elements
-        p = int(k + (self.size - k) * d)
-        p = p - (p % k)
+        # Draw columns index and verify corresponding rank consistency
+        cols = numpy.random.randint(k, size=self.size)
+        _, counts = numpy.unique(cols, return_counts=True)
 
-        # Subspace fill-in
+        while len(counts) != k:
+            cols = numpy.random.randint(k, size=self.size)
+            _, counts = numpy.unique(cols, return_counts=True)
+
         index = numpy.arange(self.size)
-        cols = index % k
-        numpy.random.shuffle(index)
-        subspace[index[:p], cols[:p]] = (2 * numpy.random.randint(0, 2, size=p) - 1)
 
-        return subspace.tocsr() / numpy.sqrt(p / k)
+        # Fill-in with coefficients in {-1, 1}
+        subspace[index, cols] = (2 * numpy.random.randint(0, 2, size=self.size) - 1)
 
-    def _gaussian_sparse(self, k: int, d: float) -> scipy.sparse.csc_matrix:
+        return subspace.tocsr()
+
+    def _gaussian_sparse(self, k: int) -> scipy.sparse.csc_matrix:
         """
         Draw a subspace from the Gaussian Sparse distribution.
 
         :param k: Size of the subspace to build.
-        :param d: Control the sparsity of the subspace. The subspace will contain p = k + d(n - k)
-        non-zeros elements.
         """
 
-        # Initialize subspace in lil format to allow easy update
+        # Initialize subspace in dok format to allow easy update
         subspace = scipy.sparse.dok_matrix((self.size, k))
 
-        # Number of non-zeros elements
-        p = int(k + (self.size - k) * d)
-        p = p - (p % k)
+        # Draw columns index and verify corresponding rank consistency
+        cols = numpy.random.randint(k, size=self.size)
+        _, counts = numpy.unique(cols, return_counts=True)
 
-        # Subspace fill-in
+        while len(counts) != k:
+            cols = numpy.random.randint(k, size=self.size)
+            _, counts = numpy.unique(cols, return_counts=True)
+
         index = numpy.arange(self.size)
-        cols = index % k
-        numpy.random.shuffle(index)
-        subspace[index[:p], cols[:p]] = numpy.random.randn(p)
 
-        return subspace.tocsr() / numpy.sqrt(p / k)
+        # Fill-in with coefficients drawn from standard normal distribution
+        subspace[index, cols] = numpy.random.randn(self.size)
+
+        return subspace.tocsr()
 
     def _nystrom(self, k: int, lin_op: scipy.sparse.spmatrix, p: int = 10) -> numpy.ndarray:
         """
