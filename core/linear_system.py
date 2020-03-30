@@ -324,7 +324,7 @@ class ConjugateGradient(_LinearSolver):
                  lin_sys: LinearSystem,
                  x_0: numpy.ndarray = None,
                  M: Preconditioner = None,
-                 tol: float = 1e-6,
+                 tol: float = 1e-5,
                  maxiter: int = None,
                  buffer: int = None,
                  arnoldi: bool = False) -> None:
