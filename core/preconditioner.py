@@ -12,6 +12,7 @@ Description:
 import pyamg
 import numpy
 import scipy.linalg
+import pyamg.relaxation.relaxation
 import scipy.sparse.linalg
 
 from core.linear_operator import LinearOperator, MatrixOperator
@@ -213,7 +214,7 @@ class DiagonalPreconditioner(Preconditioner):
         return 2 * self.shape[0]
 
 
-class SymmetricSuccessiveOverRelaxation(Preconditioner):
+class SymmetricGaussSeidel(Preconditioner):
     """
     Abstract class for Symmetric Successive Over-Relaxation (SSOR) preconditioners. Formally, it has
     the following expression, L being the lower triangular part of A:
@@ -228,35 +229,25 @@ class SymmetricSuccessiveOverRelaxation(Preconditioner):
 
         :param matrix_op: MatrixOperator to precondition.
         """
-        n, _ = matrix_op.shape
 
-        # Handle the different types for lin_op
-        if scipy.sparse.issparse(matrix_op.matrix):
-            self._upper = scipy.sparse.triu(matrix_op.matrix, format='csr')
-            self._lower = scipy.sparse.tril(matrix_op.matrix, format='csr')
-            self._diag = scipy.sparse.diags(matrix_op.matrix.diagonal())
-        else:
-            self._upper = numpy.triu(matrix_op.matrix)
-            self._lower = numpy.tril(matrix_op.matrix)
-            self._diag = numpy.diag(numpy.diag(matrix_op.matrix))
+        # Sanitize matrix operator argument
+        if not isinstance(matrix_op, MatrixOperator):
+            raise PreconditionerError('Gauss-Seidel method needs a MatrixOperator object.')
 
         super().__init__(matrix_op.shape, matrix_op.dtype, matrix_op)
 
-        self.name = 'SSOR'
+        # Prevent unresolved references
+        self.lin_op = matrix_op
+
+        self.name = 'Symmetric Gauss-Seidel'
 
     def _apply(self, x):
-        scipy.sparse.linalg.spsolve_triangular(self._upper, x, lower=False, overwrite_b=True)
-        x = self._diag.dot(x)
-        scipy.sparse.linalg.spsolve_triangular(self._lower, x, lower=True, overwrite_b=True)
-
-        return x
+        x_0 = numpy.zeros_like(x)
+        pyamg.relaxation.relaxation.gauss_seidel(self.lin_op.matrix, x_0, x, sweep='symmetric')
+        return x_0
 
     def _matvec_cost(self):
-        cost = 0
-        cost += self._upper.size
-        cost += 2 * self._diag.shape[0]
-        cost += self._upper.size
-        return cost
+        return self.lin_op.apply_cost
 
 
 class AlgebraicMultiGrid(Preconditioner):
@@ -426,11 +417,14 @@ class AlgebraicPreconditionerFactory(object):
         :param kwargs: Optional named arguments for preconditioner.
         """
 
-        if preconditioner == 'jacobi':
+        if preconditioner == 'identity':
+            return IdentityPreconditioner(self.lin_op)
+
+        elif preconditioner == 'jacobi':
             return DiagonalPreconditioner(self.lin_op)
 
-        elif preconditioner == 'identity':
-            return IdentityPreconditioner(self.lin_op)
+        elif preconditioner == 'symmetric_gs':
+            return SymmetricGaussSeidel(self.lin_op)
 
         elif preconditioner == 'amg':
             return AlgebraicMultiGrid(self.lin_op, *args, **kwargs)
