@@ -306,7 +306,7 @@ def benchmark(operator: TestOperator, setup: dict, subspaces: list) -> None:
     report_name = initialize_report(operator, setup, n_iterations)
 
     # Process the benchmark
-    for k in tqdm.tqdm(subspaces):
+    for k in subspaces:
         report_line = '{:4} | '.format(k)
 
         # Create the subspace factory producing subspaces of shape (n, k)
