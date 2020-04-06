@@ -33,7 +33,7 @@ class LinearOperator(scipyLinearOperator):
         Abstract representation of linear operators. Extends the existing LinearOperator class in Python library
         scipy.linalg.LinearOperator so as to handle sparse matrix representations.
 
-        :param shape: Shape of the linear operator corresponding to the dimensions of domain and codomain of the linear
+        :param shape: Shape of the linear operator corresponding to the dimensions of domain and co-domain of the linear
             operator
         :param dtype: Type of the elements in the linear operator.
         """
