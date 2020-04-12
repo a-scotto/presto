@@ -105,6 +105,9 @@ class SubspaceGenerator(object):
         elif subspace == 'random_split':
             return self._random_split(k)
 
+        elif subspace == 'nystrom':
+            return self._nystrom(k, **kwargs)
+
         else:
             raise SubspaceGeneratorError('Unknown deterministic subspace name.')
 
