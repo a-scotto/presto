@@ -9,12 +9,12 @@ Created on August 20, 2019 at 09:09.
 Description:
 """
 
+import json
+import numpy
 import argparse
 
 from matplotlib import pyplot
-from core.projection_subspace import DeterministicSubspaceFactory, RandomSubspaceFactory
-from utils.postprocessing import arrange_report, convert_to_dense, process_data, read_report
-
+from utils.utils import merge_reports
 
 COLORS = ['tab:blue',
           'tab:orange',
@@ -27,78 +27,86 @@ COLORS = ['tab:blue',
           'tab:olive',
           'tab:cyan']
 
-MARKER = ['', 'o', 's', '^']
-
 # Parse command line argument
 parser = argparse.ArgumentParser()
-parser.add_argument('reports',
+parser.add_argument('report',
                     nargs='*',
                     help='Paths of reports text files to post-process.')
+parser.add_argument('-s'
+                    '--spectrum',
+                    dest='spectrum',
+                    default=False,
+                    action='store_true',
+                    help='Whether to plot the approximate spectrum histogram.')
 
 args = parser.parse_args()
 
-# Sort the reports by operator tested
-reports = arrange_report(args.reports)
+# Sort the reports by operator and preconditioner tested
+merged_reports = merge_reports(args.report)
 
 # Go through all the reports
-for operator, REPORT_PATHS in reports.items():
-    pyplot.figure()
-    pyplot.grid()
-
-    # Initialization for script coherence
-    metadata, subspace_sizes = None, None
-
-    # Browse through the reports file names in the report set
-    for j, REPORT_PATH in enumerate(REPORT_PATHS):
-        # Retrieve data from the report
-        metadata, data = read_report(REPORT_PATH)
-        # Process the data
-        subspace_sizes, processed_data = process_data(data)
-
-        if metadata['subspace_type'] in RandomSubspaceFactory.subspace_type.keys():
-            _type = RandomSubspaceFactory.subspace_type[metadata['subspace_type']]
-
-        elif metadata['subspace_type'] in DeterministicSubspaceFactory.subspace_type.keys():
-            _type = DeterministicSubspaceFactory.subspace_type[metadata['subspace_type']]
-
+for operator in merged_reports.keys():
+    for preconditioner in merged_reports[operator]:
+        if args.spectrum:
+            figure, (axes1, axes2) = pyplot.subplots(1, 2, figsize=(10, 6))
         else:
-            raise ValueError('Type of subspace not recognized, must be either dense or sparse.')
+            figure, axes1 = pyplot.subplots(1, 1)
+            axes2 = None
 
-        if _type == 'sparse':
-            subspace_sizes = convert_to_dense(subspace_sizes, metadata['nnz'], metadata['size'])
+        approx_spectrum = None
 
-        label = metadata['subspace_type'].replace('_', ' ').capitalize()
-        label = label + ': ' + metadata['subspace_parameter']
+        for i, REPORT_FILE in enumerate(merged_reports[operator][preconditioner]):
 
-        pyplot.errorbar(subspace_sizes,
-                        processed_data['mean'] * metadata['reference'],
-                        yerr=processed_data['standard_deviation'] * metadata['reference'],
-                        c=COLORS[j % len(COLORS)],
-                        fmt='o-',
-                        mec='k',
-                        ms=4,
-                        elinewidth=0.5,
-                        ecolor='k',
-                        capsize=2.5,
-                        label=label)
+            with open(REPORT_FILE, 'r') as file:
+                report = json.load(file)
 
-    # Plot reference line
-    pyplot.hlines(y=metadata['reference'],
-                  xmin=0.,
-                  xmax=subspace_sizes[-1],
-                  linestyle='dashed',
-                  label='PCG with M alone')
+            if axes2 is not None and approx_spectrum is None:
+                approx_spectrum = numpy.log10(report['approximate_spectrum'])
+                axes2.hist(approx_spectrum, bins=int(len(approx_spectrum)**0.5))
+                axes2.title.set_text(r'Approximate spectrum of $\mathsf{MA}$.')
+                axes2.set_xlabel(r'$\log_{10}(\sigma)$')
 
-    # Set corresponding title regarding the comparison criterion
-    plot_title = 'LMP results on $A=$ {}, $n=$ {}, $M=$ {}'\
-        .format(operator, metadata['size'], metadata['first_precond'].capitalize())
+            figure.suptitle('LMP performances vs dimension of subspace, $M=${}'
+                            .format(report['preconditioner']['name'].capitalize()),
+                            fontsize=14)
 
-    # Add the legend, title, and axis titles
-    pyplot.legend()
-    pyplot.title(plot_title)
-    pyplot.xlabel('Equivalent dense subspace size.')
-    pyplot.ylabel('Preconditioned CG number of iterations.')
-    pyplot.xlim(left=0.)
-    pyplot.ylim(bottom=0.)
+            x_axis = list()
+            error_bar = list() if report['subspace']['n_tests'] != 1 else None
+            for sub_dim, data in report['data'].items():
+                x_axis.append(numpy.mean(data))
+                if error_bar is not None:
+                    error_bar.append(numpy.std(data))
+
+            y_axis = numpy.asarray(report['computational_cost']) / report['MAX_BUDGET']
+
+            label = report['subspace']['name'].replace('_', ' ').capitalize()
+            try:
+                label += ' (' + str(report['subspace']['args'][0]) + ')'
+            except IndexError:
+                pass
+
+            axes1.errorbar(y_axis, x_axis,
+                           c=COLORS[i % len(COLORS)], fmt='s-', mec='k', ms=3,
+                           yerr=error_bar, elinewidth=1, ecolor='k', capsize=3,
+                           label=label)
+
+        # Plot reference line
+        axes1.hlines(y=report['reference'],
+                     xmin=0.,
+                     xmax=1.,
+                     linestyle='dashed',
+                     label='PCG with $M$ alone')
+
+        # Set corresponding title regarding the comparison criterion
+        plot_title = 'LMP on {} ($n=$ {})'.format(operator, report['n'])
+
+        # Add the legend, title, and axis titles
+        axes1.legend(loc=3)
+        axes1.title.set_text(plot_title)
+        axes1.set_xlabel('Fraction of maximum budget used.')
+        axes1.set_ylabel('PCG number of iterations.')
+        axes1.set_xlim(0., 1.)
+        axes1.set_ylim(bottom=0.)
+        axes1.grid()
 
 pyplot.show()
