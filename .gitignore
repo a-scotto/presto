@@ -1,7 +1,6 @@
 .idea
 __pycache__
 reports/*
-run.py
+operators/*
 script.py
-setup
-runs/*
+*.json
