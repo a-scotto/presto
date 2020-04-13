@@ -52,9 +52,6 @@ class LinearOperator(scipyLinearOperator):
         except TypeError:
             raise LinearOperatorError('dtype provided not understood.')
 
-        self.self_adjoint = None
-        self.positive_definite = None
-
         self.matvec_cost = self._matvec_cost()
 
     def _matvec(self, x: numpy.ndarray) -> numpy.ndarray:
@@ -247,17 +244,13 @@ class IdentityOperator(LinearOperator):
 
 
 class MatrixOperator(LinearOperator):
-    def __init__(self, matrix: object,
-                 self_adjoint: bool = False,
-                 positive_definite: bool = False):
+    def __init__(self, matrix: object):
         """
         Abstract class for matrix representations of linear operators.
 
         :param matrix: Matrix representation of a linear operator. Must be one of:
             * numpy.ndarray
             * scipy.sparse.spmatrix
-        :param self_adjoint: Whether the linear operator is self-adjoint.
-        :param positive_definite: Whether the self-adjoint linear operator is positive-definite.
         """
         # Sanitize the matrix attribute and check for potential sparse representation
         if not isinstance(matrix, (numpy.ndarray, scipy.sparse.spmatrix)):
@@ -268,9 +261,6 @@ class MatrixOperator(LinearOperator):
         self.matrix = matrix
 
         super().__init__(matrix.shape, matrix.dtype)
-
-        self.self_adjoint = self_adjoint
-        self.positive_definite = positive_definite
 
     def _matvec(self, x):
         x = numpy.asanyarray(x)

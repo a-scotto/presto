@@ -40,7 +40,9 @@ class AssumptionError(Exception):
 class LinearSystem(object):
     def __init__(self,
                  linear_op: LinearOperator,
-                 rhs: numpy.ndarray):
+                 rhs: numpy.ndarray,
+                 M: Preconditioner = None,
+                 x_opt: numpy.ndarray = None):
         """
         Abstract representation for linear system of the form Ax = b, where A is a linear operator and b the right-hand
         side. Information related to the nature of the linear operator are provided since the iterative methods for the
@@ -48,6 +50,8 @@ class LinearSystem(object):
 
         :param linear_op: Linear operator involved in the linear system.
         :param rhs: Right-hand side associated.
+        :param M: Preconditioner to be used to enhance solver convergence.
+        :param x_opt: Solution of the linear system if available.
         """
         # Sanitize the linear operator attribute
         if not isinstance(linear_op, LinearOperator):
@@ -62,9 +66,30 @@ class LinearSystem(object):
         if rhs.shape[0] != linear_op.shape[1]:
             raise LinearSystemError('Linear operator and right-hand side have inconsistent shapes.')
 
-        # Initialize the linear system's attributes
         self.rhs = rhs
 
+        # Sanitize the preconditioner attribute
+        M = IdentityPreconditioner(linear_op) if M is None else M
+
+        if not isinstance(M, Preconditioner):
+            raise IterativeSolverError('Preconditioner must be an instance of Preconditioner.')
+
+        if not (M.linear_op is self.linear_op):
+            raise IterativeSolverError('Preconditioner must be related to the same linear operator as the one in the '
+                                       'linear system.')
+
+        self.M = M
+
+        # Sanitize the solution argument
+        if x_opt is not None and not isinstance(x_opt, numpy.ndarray):
+            raise LinearSystemError('Exact solution provided must be a numpy.ndarray.')
+
+        if x_opt is not None and x_opt.shape[0] != linear_op.shape[1]:
+            raise LinearSystemError('Linear operator and its solution have inconsistent shapes.')
+
+        self.x_opt = x_opt
+
+        # Keep track of whether the system has multiple right-hand sides
         self.block = False if self.rhs.shape[1] == 1 else True
 
     def get_residual(self, x: numpy.ndarray) -> numpy.ndarray:
@@ -75,6 +100,17 @@ class LinearSystem(object):
         """
         return self.rhs - self.linear_op.dot(x)
 
+    def get_error_norm(self, x: numpy.ndarray) -> numpy.ndarray:
+        """
+        Compute the 2-norm error e(x) = ||x - x_opt||_2, if x_opt is available.
+
+        :param x: Vector on which the error is computed.
+        """
+        if self.x_opt is None:
+            raise LinearSystemError('Cannot compute error since linear system solution is not known.')
+
+        return numpy.linalg.norm(x - self.x_opt)
+
     def perturb(self, epsilon):
         """
         Compute a modified linear system via a random perturbation of the linear operator and the right-hand side.
@@ -84,15 +120,10 @@ class LinearSystem(object):
         if not isinstance(self.linear_op, MatrixOperator):
             raise LinearSystemError('Perturbation can only be applied to linear systems involving a MatrixOperator.')
 
-        normalization_ = numpy.linalg.norm(self.linear_op.matrix.diagonal())
-        perturbed_linop = self.linear_op.matrix + epsilon * normalization_ * scipy.sparse.eye(self.rhs.size)
-        perturbed_rhs = self.rhs + epsilon * normalization_ * numpy.random.randn(self.rhs.size, 1)
+        normalization = numpy.linalg.norm(self.linear_op.matrix.diagonal())
 
-        A_ = MatrixOperator(perturbed_linop,
-                            self_adjoint=self.linear_op.self_adjoint,
-                            positive_definite=self.linear_op.positive_definite)
-
-        b_ = perturbed_rhs
+        A_ = self.linear_op + epsilon * normalization * MatrixOperator(scipy.sparse.eye(self.rhs.size))
+        b_ = self.rhs + epsilon * normalization * numpy.random.randn(self.rhs.size, 1)
 
         return LinearSystem(A_, b_)
 
@@ -110,7 +141,6 @@ class _IterativeSolver(object):
     def __init__(self,
                  linear_system: LinearSystem,
                  x0: numpy.ndarray = None,
-                 M: Preconditioner = None,
                  tol: float = 1e-5,
                  maxiter: int = None):
         """
@@ -120,7 +150,6 @@ class _IterativeSolver(object):
         
         :param linear_system: Linear system to be solved.
         :param x0: Initial guess for the linear system solution.
-        :param M: Preconditioner to be used to enhance solver convergence.
         :param tol: Relative tolerance threshold under which the algorithm is stopped.
         :param maxiter: Maximum number of iterations affordable before stopping the method.
         """
@@ -129,6 +158,7 @@ class _IterativeSolver(object):
             raise IterativeSolverError('Linear system to be solved must be an instance of LinearSystem.')
 
         self.linear_system = linear_system
+        self.M = self.linear_system.M
 
         # Sanitize the initial guess argument
         x0 = numpy.zeros_like(linear_system.rhs) if x0 is None else x0
@@ -142,18 +172,6 @@ class _IterativeSolver(object):
         self.x0 = x0
         self.yk = numpy.zeros_like(x0)
         self.xk = None
-
-        # Sanitize the preconditioner attribute
-        M = IdentityPreconditioner(linear_system.linear_op) if M is None else M
-
-        if not isinstance(M, Preconditioner):
-            raise IterativeSolverError('Preconditioner must be an instance of Preconditioner.')
-
-        if not (M.linear_op is self.linear_system.linear_op):
-            raise IterativeSolverError('Preconditioner must be related to the same linear operator as the one in the '
-                                       'linear system.')
-
-        self.M = M
 
         # Sanitize the tolerance argument
         if not isinstance(tol, float) or tol < 0:
@@ -183,7 +201,6 @@ class ConjugateGradient(_IterativeSolver):
     def __init__(self,
                  linear_system: LinearSystem,
                  x0: numpy.ndarray = None,
-                 M: Preconditioner = None,
                  tol: float = 1e-5,
                  maxiter: int = None,
                  store_arnoldi: bool = False) -> None:
@@ -192,7 +209,6 @@ class ConjugateGradient(_IterativeSolver):
 
         :param linear_system: Linear system to be solved.
         :param x0: Initial guess for the linear system solution.
-        :param M: Preconditioner to be used to enhance solver convergence.
         :param tol: Relative tolerance threshold under which the algorithm is stopped.
         :param maxiter: Maximum number of iterations affordable before stopping the method.
         :param store_arnoldi: Whether or not storing the Arnoldi relation elements.
@@ -200,13 +216,8 @@ class ConjugateGradient(_IterativeSolver):
         # Instantiate iterative solver base class
         super().__init__(linear_system,
                          x0=x0,
-                         M=M,
                          tol=tol,
                          maxiter=maxiter)
-
-        # Ensure the linear system lies in the assumptions of the conjugate gradient method
-        if not linear_system.linear_op.self_adjoint and not linear_system.linear_op.positive_definite:
-            raise AssumptionError('Conjugate Gradient only apply to s.d.p linear operators.')
 
         if linear_system.linear_op.shape[0] != linear_system.linear_op.shape[1]:
             raise AssumptionError('Conjugate Gradient only apply to squared operators.')
