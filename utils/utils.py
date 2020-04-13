@@ -87,7 +87,7 @@ def report_init(config: dict,
     OPERATOR_NAME = os.path.basename(OPERATOR_PATH)
 
     datetime = time.strftime('%d') + time.strftime('%m') + time.strftime('%Y') + '_'
-    datetime += time.strftime('%H') + time.strftime('%M')
+    datetime += time.strftime('%H') + time.strftime('%M') + time.strftime('%S')
 
     FILE_NAME = '_'.join([OPERATOR_NAME,
                           PRECONDITIONER['name'],
