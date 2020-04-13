@@ -11,8 +11,8 @@ Description:
 
 import json
 import numpy
-import scipy
 import argparse
+import scipy.sparse
 
 from core.linop import MatrixOperator
 from core.subspace import SubspaceGenerator
@@ -34,23 +34,28 @@ with open(args.config, 'r') as config:
 for OPERATOR_PATH in args.operators:
     A = load_operator(OPERATOR_PATH, display=True)
     b = numpy.load(OPERATOR_PATH + '_rhs.npy')
-    linsys = LinearSystem(A, b)
 
-    precond_generator = PreconditionerGenerator(linsys.linear_op)
+    # Simulate recycling Krylov subspace information via random perturbation of linear system
+    normalization = numpy.linalg.norm(A.matrix.diagonal())
+    A_ = MatrixOperator(A.matrix + config['perturbation'] * normalization * scipy.sparse.eye(b.size))
+    b_ = b + config['perturbation'] * normalization * numpy.random.randn(b.size, 1)
 
     # Recycling information
-    recycled_linsys = linsys.perturb(config['perturbation'])
-    recycled_generator = PreconditionerGenerator(recycled_linsys.linear_op)
+    precond_generator = PreconditionerGenerator(A)
+    precond_generator_ = PreconditionerGenerator(A_)
 
     MAX_BUDGET = 8 * config['MEMORY_LIMIT'] * b.size
 
     for PRECONDITIONER in config['preconditioner']:
         M = precond_generator.get(PRECONDITIONER['name'], *PRECONDITIONER['args'], **PRECONDITIONER['kwargs'])
-        M_recycled = recycled_generator.get(PRECONDITIONER['name'], *PRECONDITIONER['args'], **PRECONDITIONER['kwargs'])
+        linsys = LinearSystem(A, b, M=M)
 
-        subspace_generator = SubspaceGenerator(linsys, M=M, recycling=(recycled_linsys, M_recycled))
+        M_ = precond_generator_.get(PRECONDITIONER['name'], *PRECONDITIONER['args'], **PRECONDITIONER['kwargs'])
+        linsys_ = LinearSystem(A_, b_, M=M_)
 
-        cg_ref = ConjugateGradient(linsys, M=M, tol=config['tol'], maxiter=config['maxiter'], store_arnoldi=True)
+        subspace_generator = SubspaceGenerator(linsys, recycle=linsys_)
+
+        cg_ref = ConjugateGradient(linsys, tol=config['tol'], maxiter=config['maxiter'], store_arnoldi=True)
 
         for SUBSPACE in config['subspaces']:
             REPORT_NAME, report_content = report_init(config, PRECONDITIONER, SUBSPACE, OPERATOR_PATH)
@@ -78,7 +83,8 @@ for OPERATOR_PATH in args.operators:
                 for _ in range(SUBSPACE['n_tests']):
                     S = subspace_generator.get(SUBSPACE['name'], k, *SUBSPACE['args'], **SUBSPACE['kwargs'])
                     H = LimitedMemoryPreconditioner(linsys.linear_op, S, M)
-                    cg = ConjugateGradient(linsys, M=H, tol=config['tol'], maxiter=config['maxiter'])
+                    linsys.M = H
+                    cg = ConjugateGradient(linsys, tol=config['tol'], maxiter=config['maxiter'])
                     data.append(cg.N)
 
                 report_content['data'][str(k)] = data
