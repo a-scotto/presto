@@ -43,44 +43,40 @@ class SubspaceGenerator(object):
     def __init__(self,
                  linear_system: LinearSystem,
                  x0: numpy.ndarray = None,
-                 M: Preconditioner = None,
-                 recycling: tuple = None):
+                 recycle: LinearSystem = None):
         """
         Generator for subspaces aimed at being used for deflation, recycling or projections.
 
         :param linear_system: Linear system to be solved to obtain Krylov subspace bases.
         :param x0: Initial guess for the linear system.
-        :param M: Preconditioner for preconditioned Krylov subspace.
-        :param recycling: Additional linear system and preconditioner to recycle from.
+        :param recycle: Additional linear system to recycle from.
         """
 
-        self.M = M
         self.linear_op = linear_system.linear_op
         self.rhs = linear_system.rhs
+        self.M = linear_system.M
 
         # Sanitize recycling argument
-        if recycling is not None:
-            if not isinstance(recycling, tuple) or len(recycling) != 2:
+        if recycle is not None:
+            if not isinstance(recycle, LinearSystem):
                 raise SubspaceGeneratorError('Recycling argument must be a pair')
-
-            if not isinstance(recycling[0], LinearSystem) or not isinstance(recycling[1], Preconditioner):
-                raise SubspaceGeneratorError('Recycling argument must be a pair')
-
-            self.recycle_linsys, self.recycle_M = recycling
 
             # Retrieve information from previous system solution via Arnoldi relation
-            self.cg = ConjugateGradient(self.recycle_linsys, x0=x0, M=self.recycle_M, store_arnoldi=True)
-            self.arnoldi_matrix = self.cg.H
-            self.arnoldi_vectors = self.cg.V
+            cg = ConjugateGradient(recycle, x0=x0, store_arnoldi=True)
+            self.arnoldi_matrix = cg.H
+            self.arnoldi_vectors = cg.V
 
-            self.N = self.arnoldi_matrix.shape[1]
+            self.linear_op_ = recycle.linear_op
+            self.rhs_ = recycle.rhs
+            self.M_ = recycle.M
 
         else:
-            self.recycle_linsys = None
-            self.recycle_M = None
             self.arnoldi_matrix = None
             self.arnoldi_vectors = None
-            self.N = None
+
+            self.linear_op_ = None
+            self.rhs_ = None
+            self.M_ = None
 
     def get(self, subspace: str, k: int, *args, **kwargs) -> Union[numpy.ndarray, scipy.sparse.spmatrix]:
         """
@@ -122,9 +118,12 @@ class SubspaceGenerator(object):
         :param select: Which part of the approximate eigen-space to select, one of 'smallest', 'largest', 'extremal'.
         :param return_values: Whether to return the harmonic Ritz values.
         """
-        if k > self.N:
+        if self.linear_op_ is None:
+            raise SubspaceError('Cannot compute Ritz vectors from recycled linear system since not provided.')
+
+        if k > self.arnoldi_matrix.shape[1]:
             warnings.warn('Required more Ritz vectors than available, hence truncation.')
-            k = self.N
+            k = self.arnoldi_matrix.shape[1]
 
         # Compute the Ritz vectors from the tridiagonal matrix of the Arnoldi relation
         H_sq = self.arnoldi_matrix[:-1, :]
@@ -157,15 +156,18 @@ class SubspaceGenerator(object):
         :param select: Either 'upper' or 'lower' part of the spectral approximation.
         :param return_values: Return the harmonic Ritz values.
         """
-        if k > self.N:
+        if self.linear_op_ is None:
+            raise SubspaceError('Cannot compute harmonic Ritz vectors from recycled linear system since not provided.')
+
+        if k > self.arnoldi_matrix.shape[1]:
             warnings.warn('Required more harmonic Ritz vectors than available, hence truncation.')
-            k = self.N
+            k = self.arnoldi_matrix.shape[1]
 
         # Compute the Ritz vectors from the tridiagonal matrix of the Arnoldi relation
         H_sq = self.arnoldi_matrix[:-1, :]
         h_ll = self.arnoldi_matrix[-1, -1]
 
-        el = numpy.zeros((self.N, 1))
+        el = numpy.zeros((self.arnoldi_matrix.shape[1], 1))
         el[-1, 0] = 1.
         fl = scipy.linalg.solve(H_sq, el)
 
