@@ -56,6 +56,7 @@ class SubspaceGenerator(object):
 
         self.M = M
         self.linear_op = linear_system.linear_op
+        self.rhs = linear_system.rhs
 
         # Sanitize recycling argument
         if recycling is not None:
@@ -297,7 +298,7 @@ class SubspaceGenerator(object):
         index = numpy.arange(n_)
 
         # Fill-in with coefficients of linear system's right-hand side
-        content = self.cg.linear_system.rhs.copy().reshape(-1)
+        content = self.rhs.reshape(-1)
         subspace[index, cols] = content
 
         return subspace.tocsr()
