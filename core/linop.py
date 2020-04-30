@@ -12,9 +12,11 @@ Description:
 import numpy
 import scipy.sparse
 
+from typing import Union
+from utils.linalg import qr
 from scipy.sparse.linalg import LinearOperator as scipyLinearOperator
 
-__all__ = ['LinearOperator', 'IdentityOperator', 'MatrixOperator']
+__all__ = ['LinearOperator', 'IdentityOperator', 'MatrixOperator', 'Projector']
 
 
 class LinearOperatorError(Exception):
@@ -26,6 +28,12 @@ class LinearOperatorError(Exception):
 class MatrixOperatorError(Exception):
     """
     Exception raised when MatrixOperator object encounters specific errors.
+    """
+
+
+class ProjectorError(Exception):
+    """
+    Exception raised when Projector object encounters specific errors.
     """
 
 
@@ -244,7 +252,7 @@ class IdentityOperator(LinearOperator):
 
 
 class MatrixOperator(LinearOperator):
-    def __init__(self, matrix: object):
+    def __init__(self, matrix: Union[numpy.ndarray, scipy.sparse.spmatrix]):
         """
         Abstract class for matrix representations of linear operators.
 
@@ -283,3 +291,84 @@ class MatrixOperator(LinearOperator):
 
     def _matvec_cost(self):
         return 2 * self.matrix.size
+
+
+class Projector(LinearOperator):
+    def __init__(self,
+                 V: Union[numpy.ndarray, scipy.sparse.spmatrix],
+                 W: Union[numpy.ndarray, scipy.sparse.spmatrix] = None,
+                 factorize: bool = False,
+                 ip_B: LinearOperator = None):
+        """
+        Abstract class for projectors, oblique or orthogonal.
+
+        :param V: matrix representation of linear subspace onto which the projection is made.
+        :param W: matrix representation of linear subspace along the orthogonal of which the projection is made.
+        :param factorize: whether to compute a QR factorizations of the subspaces.
+        """
+        # Sanitize the subspaces arguments provided
+        if not isinstance(V, (numpy.ndarray, scipy.sparse.spmatrix)):
+            raise ProjectorError('Subspaces representation must be of matrix-like format but received {}'
+                                 .format(type(V)))
+
+        W = V if W is None else W
+
+        if not isinstance(W, (numpy.ndarray, scipy.sparse.spmatrix)):
+            raise ProjectorError('Subspaces representation must be of matrix-like format but received {}'
+                                 .format(type(W)))
+
+        if V.shape != W.shape:
+            raise ProjectorError('Both subspaces must be of same shape.')
+
+        self.V, self.W = V, W
+        n, k = self.V.shape
+
+        # Process QR factorization in case of orthogonal projection if asked to
+        if factorize and (self.V is self.W):
+            try:
+                self.VQ, _ = qr(V, ip_B=ip_B)
+            except (TypeError, ValueError):
+                self.VQ, _ = qr(V.todense(), ip_B=ip_B)
+
+            self.WQ = ip_B.dot(self.VQ) if ip_B is not None else self.VQ
+            self.Q, self.R = None, None
+        else:
+            try:
+                self.Q, self.R = qr(self.W.T @ self.V, ip_B=ip_B)
+            except (TypeError, ValueError):
+                self.Q, self.R = qr(self.W.T @ self.V.todense(), ip_B=ip_B)
+            self.VQ, self.WQ = None, None
+        dtype = numpy.find_common_type([self.V, self.W], [])
+        super().__init__((n, n), dtype)
+
+    def _matvec(self, x):
+        if self.Q is None:
+            y = self.WQ.T.dot(x)
+            y = self.VQ.dot(y)
+        else:
+            y = self.W.T.dot(x)
+            y = self.Q.T.dot(y)
+            y = scipy.linalg.solve_triangular(self.R, y, lower=False)
+            y = self.V.dot(y)
+        return y
+
+    def _rmatvec(self, x):
+        if self.Q is None:
+            y = self.VQ.T.dot(x)
+            y = self.WQ.dot(y)
+        else:
+            y = self.V.T.dot(x)
+            y = scipy.linalg.solve_triangular(self.R.T, y, lower=True)
+            y = self.Q.dot(y)
+            y = self.W.dot(y)
+
+        return y
+
+    def apply_complement(self, x):
+        return x - self.dot(x)
+
+    def _matvec_cost(self):
+        if self.Q is None:
+            return 4 * self.VQ.size
+        else:
+            return 2 * (self.V.size + self.W.size + self.Q.size + self.R.size)
