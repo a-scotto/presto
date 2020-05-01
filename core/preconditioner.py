@@ -401,7 +401,7 @@ class CoarseGridCorrection(Preconditioner):
         else:
             self._subspace = subspace
 
-        # Compute the reduced operator S^T * A *S
+        # Compute the Galerkin operator S^T @ A @ S
         self._reduced_linear_op = self._subspace.T.dot(linear_op.dot(self._subspace))
 
         if sparse_subspace:
