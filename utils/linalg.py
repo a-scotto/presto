@@ -35,16 +35,18 @@ def inner(V: numpy.ndarray, W: numpy.ndarray, ip_B: LinearOperator = None) -> nu
     if not V.shape[0] == W.shape[0]:
         raise LinearAlgebraError('V and W have inconsistent shapes: {} and {}'.format(V.shape, W.shape))
 
-    n, m = V.shape
-    _, p = W.shape
-
     if ip_B is not None and not isinstance(ip_B, LinearOperator):
         raise LinearAlgebraError('Inner product must be a LinearOperator instance.')
 
-    if ip_B is None:
-        return V.T.conj() @ W
-    else:
-        return ip_B.dot(V).T.conj() @ W
+    if ip_B is not None:
+        V = ip_B.dot(V)
+
+    inner_product = V.T.conj() @ W
+
+    if scipy.sparse.isspmatrix(inner_product):
+        inner_product = inner_product.todense()
+
+    return inner_product
 
 
 def norm(x: numpy.ndarray, ip_B: LinearOperator = None) -> float:
@@ -71,6 +73,8 @@ def qr(X, ip_B=None, reorthos=1):
     :return: Q, R where :math:`X=QR` with :math:`\\langle Q,Q \\rangle=I_k` and
       R upper triangular.
     """
+    if scipy.sparse.isspmatrix(X):
+        X = X.todense()
 
     if ip_B is None and X.shape[1] > 0:
         return scipy.linalg.qr(X, mode='economic')
