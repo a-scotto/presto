@@ -11,8 +11,10 @@ Description:
 
 import os
 import time
+import numpy
 import pickle
 import os.path
+import warnings
 import scipy.optimize
 
 from typing import List, Tuple
@@ -141,3 +143,22 @@ def load_operator(OPERATOR_FILE_PATH: str, display: bool = False) -> LinearOpera
         print(operator)
 
     return operator
+
+
+def random_surjection(n: int, k: int) -> numpy.ndarray:
+
+    if k / n > 1 / numpy.log(n / 0.05):
+        warnings.warn('Ratio "k/n" might not exceed {:1.2f}% for efficient random surjection draw.'
+                      .format(100 / numpy.log(n / 0.05)))
+
+    # Draw random map from n to k
+    surjection = numpy.random.randint(k, size=n)
+    unique = numpy.unique(surjection, return_counts=False)
+
+    # Check surjectivity
+    while len(unique) != k:
+        surjection = numpy.random.randint(k, size=n)
+        unique = numpy.unique(surjection, return_counts=False)
+
+    return surjection
+
