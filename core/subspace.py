@@ -16,7 +16,7 @@ import scipy.sparse
 import scipy.linalg
 
 from typing import Tuple, Union
-from core.preconditioner import Preconditioner
+from utils.utils import random_surjection
 from core.linsys import LinearSystem, ConjugateGradient
 
 
@@ -101,6 +101,9 @@ class SubspaceGenerator(object):
 
         elif subspace == 'random_split':
             return self._random_split(k)
+
+        elif subspace == 'random_amg':
+            return self._random_amg(k, *args, **kwargs)
 
         elif subspace == 'nystrom':
             return self._nystrom(k, **kwargs)
@@ -262,14 +265,7 @@ class SubspaceGenerator(object):
         subspace = scipy.sparse.dok_matrix((n_, k))
 
         # Draw columns indices
-        cols = numpy.random.randint(k, size=n_)
-        _, counts = numpy.unique(cols, return_counts=True)
-
-        # Check rank consistency
-        while len(counts) != k:
-            cols = numpy.random.randint(k, size=n_)
-            _, counts = numpy.unique(cols, return_counts=True)
-
+        cols = random_surjection(n_, k)
         index = numpy.arange(n_)
 
         # Fill-in with coefficients in {-1, 1}
@@ -277,7 +273,7 @@ class SubspaceGenerator(object):
 
         return subspace.tocsr()
 
-    def _random_split(self, k: int) -> scipy.sparse.csc_matrix:
+    def _random_split(self, k: int, x: numpy.ndarray = None) -> scipy.sparse.csc_matrix:
         """
         Draw a subspace from the random split distribution.
 
@@ -289,21 +285,65 @@ class SubspaceGenerator(object):
         subspace = scipy.sparse.dok_matrix((n_, k))
 
         # Draw columns indices
-        cols = numpy.random.randint(k, size=n_)
-        _, counts = numpy.unique(cols, return_counts=True)
-
-        # Check rank consistency
-        while len(counts) != k:
-            cols = numpy.random.randint(k, size=n_)
-            _, counts = numpy.unique(cols, return_counts=True)
-
+        cols = random_surjection(n_, k)
         index = numpy.arange(n_)
 
         # Fill-in with coefficients of linear system's right-hand side
-        content = self.rhs.reshape(-1)
+        content = self.rhs.reshape(-1) if x is None else x
         subspace[index, cols] = content
 
         return subspace.tocsr()
+
+    def _random_amg(self, k: int,
+                    heuristic: str,
+                    randomization: str,
+                    **kwargs) -> numpy.ndarray:
+        """
+        Compute a subspace in two levels, a first one obtained via an algebraic multi-grid method, and the second one of
+        random type. The resulting subspace is then in the form of a product.
+
+        :param k: Number of approximate eigen-vectors to compute.
+        :param heuristic: Name of the algebraic multi-grid heuristic used to construct the hierarchy.
+        :param randomization: Name of the random distribution to use for the second level projection.
+        :param kwargs: complementary arguments for algebraic multi-grid construction, see PyAMG library for details.
+        """
+        # Sanitize heuristic argument
+        if heuristic not in ['ruge_stuben', 'smoothed_aggregated', 'rootnode']:
+            raise SubspaceError('Algebraic multi-grid heuristic {} unknown.'.format(heuristic))
+
+        # Setup multi-grid hierarchical structure with corresponding heuristic
+        if heuristic == 'ruge_stuben':
+            self.amg = pyamg.ruge_stuben_solver(self.linear_op.matrix.tocsr(), **kwargs)
+
+        elif heuristic == 'smoothed_aggregated':
+            self.amg = pyamg.smoothed_aggregation_solver(self.linear_op.matrix.tocsr(), **kwargs)
+
+        elif heuristic == 'rootnode':
+            self.amg = pyamg.rootnode_solver(self.linear_op.matrix.tocsr(), **kwargs)
+
+        P = self.amg.levels[0].P
+
+        _, k_ = P.shape
+
+        # Sanitize heuristic argument
+        if randomization not in ['binary_sparse', 'gaussian_sparse']:
+            raise SubspaceError('Randomization name {} unknown.'.format(heuristic))
+
+        # Initialize subspace in dok format to allow easy update
+        G = scipy.sparse.dok_matrix((k_, k))
+
+        # Draw columns indices
+        cols = random_surjection(k_, k)
+        index = numpy.arange(k_)
+
+        # Setup multi-grid hierarchical structure with corresponding heuristic
+        if randomization == 'binary_sparse':
+            G[index, cols] = (2 * numpy.random.randint(0, 2, size=k_) - 1)
+
+        elif randomization == 'gaussian_sparse':
+            G[index, cols] = numpy.random.randn(k_)
+
+        return P @ G
 
     def _nystrom(self, k: int, p: int = 10) -> numpy.ndarray:
         """
