@@ -13,7 +13,7 @@ import numpy
 import scipy.sparse
 
 from typing import Union
-from utils.linalg import qr
+from utils.linalg import qr, inner
 from scipy.sparse.linalg import LinearOperator as scipyLinearOperator
 
 __all__ = ['LinearOperator', 'IdentityOperator', 'MatrixOperator', 'Projector']
@@ -321,46 +321,65 @@ class Projector(LinearOperator):
             raise ProjectorError('Both subspaces must be of same shape.')
 
         self.V, self.W = V, W
-        n, k = self.V.shape
+        self.factorize = factorize
+        n, _ = self.V.shape
+        self.ip_B = IdentityOperator(n) if ip_B is None else ip_B
 
         # Process QR factorization in case of orthogonal projection if asked to
         if factorize and (self.V is self.W):
-            try:
-                self.VQ, _ = qr(V, ip_B=ip_B)
-            except (TypeError, ValueError):
-                self.VQ, _ = qr(V.todense(), ip_B=ip_B)
-
-            self.WQ = ip_B.dot(self.VQ) if ip_B is not None else self.VQ
+            self.VQ, _ = qr(V)
+            self.WQ = self.VQ
+            self.L_factor, self.LT_factor = None, None
             self.Q, self.R = None, None
         else:
             try:
-                self.Q, self.R = qr(self.W.T @ self.V, ip_B=ip_B)
-            except (TypeError, ValueError):
-                self.Q, self.R = qr(self.W.T @ self.V.todense(), ip_B=ip_B)
-            self.VQ, self.WQ = None, None
+                self.L_factor = scipy.linalg.cho_factor(inner(self.V, self.W, ip_B=ip_B), lower=True)
+                self.LT_factor = scipy.linalg.cho_factor(inner(self.V, self.W, ip_B=ip_B), lower=False)
+                self.Q, self.R = None, None
+                self.VQ, self.WG = None, None
+            except numpy.linalg.LinAlgError:
+                self.Q, self.R = qr(self.W.T @ self.V)
+                self.L_factor, self.LT_factor = None, None
+                self.VQ, self.WG = None, None
+
         dtype = numpy.find_common_type([self.V, self.W], [])
         super().__init__((n, n), dtype)
 
     def _matvec(self, x):
-        if self.Q is None:
+        if self.factorize:
             y = self.WQ.T.dot(x)
             y = self.VQ.dot(y)
-        else:
+            return y
+
+        elif self.L_factor is not None:
+            y = self.W.T.dot(self.ip_B.dot(x))
+            scipy.linalg.cho_solve(self.L_factor, y, overwrite_b=True)
+            y = self.V.dot(y)
+            return y
+
+        elif self.Q is not None:
             y = self.W.T.dot(x)
             y = self.Q.T.dot(y)
             y = scipy.linalg.solve_triangular(self.R, y, lower=False)
             y = self.V.dot(y)
-        return y
+            return y
 
     def _rmatvec(self, x):
-        if self.Q is None:
+        if self.factorize:
             y = self.VQ.T.dot(x)
             y = self.WQ.dot(y)
-        else:
+        elif self.LT_factor is not None:
+            y = self.V.T.dot(x)
+            scipy.linalg.cho_solve(self.LT_factor, y, overwrite_b=True)
+            y = self.W.dot(y)
+            y = self.ip_B.dot(y)
+        elif self.Q is not None:
             y = self.V.T.dot(x)
             y = scipy.linalg.solve_triangular(self.R.T, y, lower=True)
             y = self.Q.dot(y)
             y = self.W.dot(y)
+        else:
+            raise ProjectorError('')
 
         return y
 
@@ -368,7 +387,11 @@ class Projector(LinearOperator):
         return x - self.dot(x)
 
     def _matvec_cost(self):
-        if self.Q is None:
+        if self.factorize:
             return 4 * self.VQ.size
-        else:
+        elif self.L_factor is not None:
+            return 2 * (self.V.size + self.W.size + self.L_factor[0].size)
+        elif self.Q is not None:
             return 2 * (self.V.size + self.W.size + self.Q.size + self.R.size)
+        else:
+            raise ProjectorError('')
