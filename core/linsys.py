@@ -13,10 +13,14 @@ import numpy
 import scipy.linalg
 import scipy.sparse
 
-from core.linop import LinearOperator, MatrixOperator
-from core.preconditioner import Preconditioner, IdentityPreconditioner
+from typing import Union
+from utils.linalg import norm
+from core.linop import LinearOperator, MatrixOperator, Projector, IdentityOperator
+from core.preconditioner import Preconditioner, IdentityPreconditioner, CoarseGridCorrection
 
 __all__ = ['LinearSystem', 'ConjugateGradient']
+
+Subspace = Union[numpy.ndarray, scipy.sparse.spmatrix]
 
 
 class LinearSystemError(Exception):
@@ -72,11 +76,7 @@ class LinearSystem(object):
         M = IdentityPreconditioner(linear_op) if M is None else M
 
         if not isinstance(M, Preconditioner):
-            raise IterativeSolverError('Preconditioner must be an instance of Preconditioner.')
-
-        if not (M.linear_op is self.linear_op):
-            raise IterativeSolverError('Preconditioner must be related to the same linear operator as the one in the '
-                                       'linear system.')
+            raise LinearSystemError('Preconditioner must be an instance of Preconditioner.')
 
         self.M = M
 
@@ -107,7 +107,7 @@ class LinearSystem(object):
         :param x: Vector on which the error is computed.
         """
         if self.x_opt is None:
-            raise LinearSystemError('Cannot compute error since linear system solution is not known.')
+            raise LinearSystemError('Cannot compute error norm since linear system solution is not known.')
 
         return numpy.linalg.norm(x - self.x_opt)
 
@@ -255,8 +255,11 @@ class ConjugateGradient(_IterativeSolver):
 
         if self.store_arnoldi:
             self.V.append(zk / self.residue_norms[-1])
-        
-        while self.residue_norms[-1] > self.tol * self.residue_norms[0] and k < self.maxiter:
+
+        # Relative tolerance with respect to ||b||_M
+        self.tol = self.tol * (norm(self.linear_system.rhs, ip_B=self.M))
+
+        while self.residue_norms[-1] > self.tol and k < self.maxiter:
             qk = self.linear_system.linear_op.dot(pk)
             dk = pk.T @ qk
             alpha = rhos[-1] / dk
@@ -321,10 +324,48 @@ class ConjugateGradient(_IterativeSolver):
         residual_decrease = self.residue_norms[-1] / self.residue_norms[0]
 
         _repr = 'Conjugate Gradient: {:4} iteration(s) |  '.format(n_iterations)
-        _repr += '||Axk - b|| = {:1.4e} | '.format(final_residual)
-        _repr += '||Axk - b|| / ||Ax0 - b|| = {:1.4e}'.format(residual_decrease)
+        _repr += '||Axk - b||_M = {:1.4e} | '.format(final_residual)
+        _repr += '||Axk - b||_M / ||b||_M = {:1.4e}'.format(residual_decrease)
 
         return _repr
+
+
+class DeflatedConjugateGradient(ConjugateGradient):
+    def __init__(self,
+                 linear_system: LinearSystem,
+                 Z: Subspace,
+                 factorize: bool = False,
+                 x0: numpy.ndarray = None,
+                 tol: float = 1e-5,
+                 maxiter: int = None,
+                 store_arnoldi: bool = False) -> None:
+        """
+        Abstract class for the (Preconditioned) Conjugate Gradient algorithm implementation.
+
+        :param linear_system: Linear system to be solved.
+        :param x0: Initial guess for the linear system solution.
+        :param tol: Relative tolerance threshold under which the algorithm is stopped.
+        :param maxiter: Maximum number of iterations affordable before stopping the method.
+        :param store_arnoldi: Whether or not storing the Arnoldi relation elements.
+        """
+        # Instantiate iterative solver base class
+        A = linear_system.linear_op
+        b = linear_system.rhs
+        M = linear_system.M
+
+        # Compute deflated linear system
+        self.P = Projector(Z, factorize=factorize, ip_B=A)
+        deflated_A = A @ (IdentityOperator(b.size) - self.P)
+        deflated_b = b - self.P.T.dot(b)
+        deflated_linsys = LinearSystem(deflated_A, deflated_b, M)
+
+        # Adjust tolerance
+        tol = tol * norm(b, ip_B=M) / norm(deflated_b, ip_B=M)
+
+        Q = CoarseGridCorrection(A, Z)
+        super().__init__(deflated_linsys, x0, tol, maxiter, store_arnoldi)
+
+        self.xk = Q.dot(b) + self.P.apply_complement(self.xk)
 
 
 # class BlockConjugateGradient(_IterativeSolver):
