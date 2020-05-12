@@ -333,8 +333,9 @@ class Projector(LinearOperator):
             self.Q, self.R = None, None
         else:
             try:
-                self.L_factor = scipy.linalg.cho_factor(inner(self.V, self.W, ip_B=ip_B), lower=True)
-                self.LT_factor = scipy.linalg.cho_factor(inner(self.V, self.W, ip_B=ip_B), lower=False)
+                M = inner(self.V, self.W, ip_B=ip_B)
+                self.L_factor = scipy.linalg.cho_factor(M, lower=True)
+                self.LT_factor = scipy.linalg.cho_factor(M, lower=False)
                 self.Q, self.R = None, None
                 self.VQ, self.WG = None, None
             except numpy.linalg.LinAlgError:
@@ -342,7 +343,7 @@ class Projector(LinearOperator):
                 self.L_factor, self.LT_factor = None, None
                 self.VQ, self.WG = None, None
 
-        dtype = numpy.find_common_type([self.V, self.W], [])
+        dtype = self.V.dtype
         super().__init__((n, n), dtype)
 
     def _matvec(self, x):
