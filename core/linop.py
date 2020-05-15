@@ -18,6 +18,8 @@ from scipy.sparse.linalg import LinearOperator as scipyLinearOperator
 
 __all__ = ['LinearOperator', 'IdentityOperator', 'MatrixOperator', 'Projector']
 
+MatrixType = Union[numpy.ndarray, scipy.sparse.spmatrix]
+
 
 class LinearOperatorError(Exception):
     """
@@ -252,7 +254,7 @@ class IdentityOperator(LinearOperator):
 
 
 class MatrixOperator(LinearOperator):
-    def __init__(self, matrix: Union[numpy.ndarray, scipy.sparse.spmatrix]):
+    def __init__(self, matrix: MatrixType):
         """
         Abstract class for matrix representations of linear operators.
 
@@ -295,8 +297,8 @@ class MatrixOperator(LinearOperator):
 
 class Projector(LinearOperator):
     def __init__(self,
-                 V: Union[numpy.ndarray, scipy.sparse.spmatrix],
-                 W: Union[numpy.ndarray, scipy.sparse.spmatrix] = None,
+                 V: MatrixType,
+                 W: MatrixType = None,
                  factorize: bool = False,
                  ip_B: LinearOperator = None):
         """
