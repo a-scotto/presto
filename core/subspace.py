@@ -12,12 +12,18 @@ Description:
 import pyamg
 import numpy
 import warnings
+import scipy.stats
 import scipy.sparse
 import scipy.linalg
 
 from typing import Tuple, Union
+from core.linop import Subspace
 from utils.utils import random_surjection
 from core.linsys import LinearSystem, ConjugateGradient
+
+__all__ = ['SubspaceGenerator']
+
+SubspaceType = Union[Subspace, numpy.ndarray, scipy.sparse.spmatrix]
 
 
 class SubspaceGeneratorError(Exception):
@@ -78,7 +84,7 @@ class SubspaceGenerator(object):
             self.rhs_ = None
             self.M_ = None
 
-    def get(self, subspace: str, k: int, *args, **kwargs) -> Union[numpy.ndarray, scipy.sparse.spmatrix]:
+    def get(self, subspace: str, k: int, *args, **kwargs) -> Subspace:
         """
         Generic method to get the different deterministic subspaces available.
 
@@ -113,7 +119,7 @@ class SubspaceGenerator(object):
 
     def _ritz(self, k: int,
               select: str = 'smallest',
-              return_values: bool = False) -> Union[numpy.ndarray, Tuple[numpy.ndarray, numpy.ndarray]]:
+              return_values: bool = False) -> Union[Subspace, Tuple[Subspace, numpy.ndarray]]:
         """
         Compute k Ritz vectors and select as required the ones of interest.
 
@@ -144,14 +150,16 @@ class SubspaceGenerator(object):
         else:
             raise SubspaceError('Select must be one of ["largest", "smallest", "extremal"], received {}'.format(select))
 
+        subspace = Subspace(ritz_vectors[:, indices])
+
         if return_values:
-            return ritz_vectors[:, indices], ritz_values[indices]
+            return subspace, ritz_values[indices]
         else:
-            return ritz_vectors[:, indices]
+            return subspace
 
     def _harmonic_ritz(self, k: int,
                        select: str = 'smallest',
-                       return_values: bool = False) -> Union[numpy.ndarray, Tuple[numpy.ndarray, numpy.ndarray]]:
+                       return_values: bool = False) -> Union[Subspace, Tuple[Subspace, numpy.ndarray]]:
         """
         Compute k harmonic Ritz vectors and select as required the ones of interest.
 
@@ -189,16 +197,18 @@ class SubspaceGenerator(object):
         else:
             raise SubspaceError('Select must be one of ["largest", "smallest", "extremal"].')
 
+        subspace = Subspace(h_ritz_vectors[:, indices])
+
         if return_values:
-            return h_ritz_vectors[:, indices], h_ritz_values[indices]
+            return subspace, h_ritz_values[indices]
         else:
-            return h_ritz_vectors[:, indices]
+            return subspace
 
     def _amg_spectral(self, k: int,
                       heuristic: str,
                       select: str = 'smallest',
                       return_values: bool = False,
-                      **kwargs) -> Union[numpy.ndarray, Tuple[numpy.ndarray, numpy.ndarray]]:
+                      **kwargs) -> Union[Subspace, Tuple[Subspace, numpy.ndarray]]:
         """
         Compute approximate eigen-vectors via algebraic multi-grid architecture and then select k vectors from the
         obtained approximate eigen-space.
@@ -248,12 +258,14 @@ class SubspaceGenerator(object):
         else:
             raise SubspaceError('Select must be one of ["largest", "smallest", "extremal"].')
 
-        if return_values:
-            return eig_vectors[:, indices], eig_values[indices]
-        else:
-            return eig_vectors[:, indices]
+        subspace = Subspace(eig_vectors[:, indices])
 
-    def _binary_sparse(self, k: int) -> scipy.sparse.csc_matrix:
+        if return_values:
+            return subspace, eig_values[indices]
+        else:
+            return subspace
+
+    def _binary_sparse(self, k: int) -> Subspace:
         """
         Draw a subspace from the Binary Sparse distribution.
 
@@ -271,9 +283,9 @@ class SubspaceGenerator(object):
         # Fill-in with coefficients in {-1, 1}
         subspace[index, cols] = (2 * numpy.random.randint(0, 2, size=n_) - 1)
 
-        return subspace.tocsr()
+        return Subspace(subspace.tocsr())
 
-    def _random_split(self, k: int, x: numpy.ndarray = None) -> scipy.sparse.csc_matrix:
+    def _random_split(self, k: int, x: numpy.ndarray = None) -> Subspace:
         """
         Draw a subspace from the random split distribution.
 
@@ -288,16 +300,17 @@ class SubspaceGenerator(object):
         cols = random_surjection(n_, k)
         index = numpy.arange(n_)
 
-        # Fill-in with coefficients of linear system's right-hand side
+        # Fill-in with coefficients of linear system's right-hand side or provided vector x
         content = self.rhs.reshape(-1) if x is None else x
         subspace[index, cols] = content
 
-        return subspace.tocsr()
+        return Subspace(subspace.tocsr())
 
     def _random_amg(self, k: int,
                     heuristic: str,
                     randomization: str,
-                    **kwargs) -> numpy.ndarray:
+                    density: float = None,
+                    **kwargs) -> Subspace:
         """
         Compute a subspace in two levels, a first one obtained via an algebraic multi-grid method, and the second one of
         random type. The resulting subspace is then in the form of a product.
@@ -321,31 +334,30 @@ class SubspaceGenerator(object):
         elif heuristic == 'rootnode':
             self.amg = pyamg.rootnode_solver(self.linear_op.matrix.tocsr(), **kwargs)
 
-        P = self.amg.levels[0].P
+        P = Subspace(self.amg.levels[0].P)
+        G = None
 
         _, k_ = P.shape
 
-        # Sanitize heuristic argument
-        if randomization not in ['binary_sparse', 'gaussian_sparse']:
+        if k > k_:
+            warnings.warn('Random restriction size superior to coarse operator size, hence truncated.')
+            k = k_
+
+        # Sanitize random distribution argument
+        if randomization not in ['gaussian']:
             raise SubspaceError('Randomization name {} unknown.'.format(heuristic))
 
         # Initialize subspace in dok format to allow easy update
-        G = scipy.sparse.dok_matrix((k_, k))
-
-        # Draw columns indices
-        cols = random_surjection(k_, k)
-        index = numpy.arange(k_)
-
-        # Setup multi-grid hierarchical structure with corresponding heuristic
-        if randomization == 'binary_sparse':
-            G[index, cols] = (2 * numpy.random.randint(0, 2, size=k_) - 1)
-
-        elif randomization == 'gaussian_sparse':
-            G[index, cols] = numpy.random.randn(k_)
+        if randomization == 'gaussian':
+            if density is not None:
+                rvs = scipy.stats.norm().rvs
+                G = Subspace(scipy.sparse.random(k_, k, density=density, data_rvs=rvs))
+            else:
+                G = Subspace(numpy.random.randn(k_, k))
 
         return P @ G
 
-    def _nystrom(self, k: int, p: int = 10) -> numpy.ndarray:
+    def _nystrom(self, k: int, p: int = 10) -> Subspace:
         """
         Compute a spectral approximation of the higher singular vectors of a linear operator using the Nyström method.
         It is a stochastic method for low-rank approximation here utilized to generate approximate spectral information.
@@ -378,4 +390,4 @@ class SubspaceGenerator(object):
         # Perform the economical SVD decomposition of F
         U, _, _ = scipy.linalg.svd(F, full_matrices=False)
 
-        return U[:, :k]
+        return Subspace(U[:, :k])
