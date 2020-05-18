@@ -10,13 +10,14 @@ Description:
 """
 
 import numpy
+import warnings
 import scipy.sparse
 
 from typing import Union
-from utils.linalg import qr, inner
+from utils.linalg import qr
 from scipy.sparse.linalg import LinearOperator as scipyLinearOperator
 
-__all__ = ['LinearOperator', 'IdentityOperator', 'MatrixOperator', 'Projector']
+__all__ = ['LinearOperator', 'IdentityOperator', 'LinearSubspace', 'Subspace', 'MatrixOperator', 'Projector']
 
 MatrixType = Union[numpy.ndarray, scipy.sparse.spmatrix]
 
@@ -24,6 +25,12 @@ MatrixType = Union[numpy.ndarray, scipy.sparse.spmatrix]
 class LinearOperatorError(Exception):
     """
     Exception raised when LinearOperator object encounters specific errors.
+    """
+
+
+class SubspaceError(Exception):
+    """
+    Exception raised when KrylovSubspace object encounters specific errors.
     """
 
 
@@ -87,8 +94,11 @@ class LinearOperator(scipyLinearOperator):
     def __add__(self, linear_op):
         return _SummedLinearOperator(self, linear_op)
 
-    def __mul__(self, linear_op):
-        return _ComposedLinearOperator(self, linear_op)
+    def __mul__(self, other):
+        if isinstance(other, LinearSubspace):
+            return _ImageSubspace(self, other)
+        else:
+            return _ComposedLinearOperator(self, other)
 
     def __neg__(self):
         return _ScaledLinearOperator(self, -1)
@@ -99,7 +109,18 @@ class LinearOperator(scipyLinearOperator):
     def _adjoint(self):
         return _AdjointLinearOperator(self)
 
+    def _mat(self):
+        if hasattr(self, 'matrix'):
+            try:
+                return self.matrix.todense()
+            except AttributeError:
+                return self.matrix
+        else:
+            _, p = self.shape
+            return self.dot(numpy.eye(p))
+
     T = property(_adjoint)
+    mat = property(_mat)
 
 
 class _ScaledLinearOperator(LinearOperator):
@@ -253,6 +274,248 @@ class IdentityOperator(LinearOperator):
         return 0.
 
 
+class LinearSubspace(scipyLinearOperator):
+    def __init__(self, dtype: object, shape: tuple):
+        """
+        Abstract representation of linear subspaces. Extends the existing LinearOperator class in Python library
+        scipy.linalg.LinearOperator so as to handle sparse matrix representations.
+
+        :param shape: Shape of the linear subspace of the form (n, p), n being the dimension of the vector space, and d
+        the number of vectors in the generating set. Dimension of the subspace is therefore <= d.
+        :param dtype: Type of the entries in the linear subspace.
+        """
+        # Instantiation of base class
+        super().__init__(dtype, shape)
+
+        self.matvec_cost = self._matvec_cost()
+
+    def _matvec(self, x: numpy.ndarray) -> numpy.ndarray:
+        """
+        Method to compute a linear combination of the linear subspace
+
+        :param x: Coefficients of the linear combination, of shape (p, 1)
+        """
+        raise NotImplemented('Method _matvec_cost not implemented.')
+
+    def _rmatvec(self, x: numpy.ndarray) -> numpy.ndarray:
+        """
+        Method to compute the restriction onto the linear subspace of a given vector.
+
+        :param x: Vector of the vector space of shape (n, 1)
+        """
+        raise NotImplemented('Method _rmatvec_cost not implemented.')
+
+    def _matvec_cost(self) -> float:
+        """
+        Method to compute the computational cost of an application of the linear subspace operator.
+        """
+        raise NotImplemented('Method _matvec_cost not implemented.')
+
+    def __add__(self, subspace):
+        return _SummedSubspace(self, subspace)
+
+    def __mul__(self, other):
+        if isinstance(other, LinearOperator) and isinstance(self, _AdjointSubspace):
+            return _ImageSubspace(other, self.T).T
+        else:
+            return _ComposedSubspace(self, other)
+
+    def _adjoint(self):
+        return _AdjointSubspace(self)
+
+    def _mat(self):
+        if hasattr(self, 'subspace'):
+            try:
+                return self.subspace.todense()
+            except AttributeError:
+                return self.subspace
+        else:
+            _, p = self.shape
+            return self.dot(numpy.eye(p))
+
+    T = property(_adjoint)
+    mat = property(_mat)
+
+
+class _SummedSubspace(LinearSubspace):
+    def __init__(self, subspace1: LinearSubspace, subspace2: LinearSubspace):
+        """
+        Abstract representation of the addition of two linear subspaces, that is, of the sum F + G of linear subspace.
+
+        :param subspace1: First subspace involved in the summation.
+        :param subspace2: Second subspace involved in the summation.
+        """
+        # Sanitize the subspaces attributes
+        if not isinstance(subspace1, LinearSubspace) or not isinstance(subspace2, LinearSubspace):
+            raise SubspaceError('Both operands in summation must be instances of LinearSubspace.')
+
+        # Check the operators compatibility
+        if subspace1.shape[0] != subspace2.shape[0]:
+            raise SubspaceError('Operands in summation have inconsistent shapes: {} and {}.'
+                                .format(subspace1.shape, subspace2.shape))
+
+        if subspace1.shape[1] + subspace2.shape[1] > subspace1.shape[0]:
+            warnings.warn('Dimensions of the 2 subspaces exceed vector space dimension, hence no longer full rank.')
+
+        # Initialize operands attribute
+        self.operands = (subspace1, subspace2)
+
+        # Resulting shape and data type
+        shape = (subspace1.shape[0], subspace1.shape[1] + subspace2.shape[1])
+        dtype = numpy.find_common_type([subspace1.dtype, subspace2.dtype], [])
+
+        super().__init__(dtype, shape)
+
+    def _matvec(self, x: numpy.ndarray) -> numpy.ndarray:
+        _, k = self.operands[0].shape
+        y = self.operands[0].dot(x[:k])
+        z = self.operands[1].dot(x[k:])
+        return y + z
+
+    def _rmatvec(self, x: numpy.ndarray) -> numpy.ndarray:
+        return numpy.vstack([self.operands[0].T.dot(x), self.operands[1].T.dot(x)])
+
+    def _matvec_cost(self) -> float:
+        n, _ = self.operands[0].shape
+        return self.operands[0].matvec_cost + self.operands[1].matvec_cost + n
+
+
+class _ImageSubspace(LinearSubspace):
+    def __init__(self, linear_op: LinearOperator, subspace: LinearSubspace):
+        """
+        Abstract representation of the image of a subspace under the action of a linear operator.
+
+        :param linear_op: Linear operator to be acting on the given subspace.
+        :param subspace: Subspace which image is considered.
+        """
+        # Sanitize the subspaces attributes
+        if not isinstance(linear_op, LinearOperator) or not isinstance(subspace, LinearSubspace):
+            raise SubspaceError('Image of a subspace requires instances of LinearOperator and LinearSubspace.')
+
+        # Check the operators compatibility
+        if linear_op.shape[1] != subspace.shape[0]:
+            raise SubspaceError('Operands in composition have inconsistent shapes: {} and {}.'
+                                .format(linear_op.shape, subspace.shape))
+
+        # Initialize operands attribute
+        self.operands = (linear_op, subspace)
+
+        # Resulting shape (n, p) @ (p, m) -> (n, m)
+        shape = subspace.shape
+        dtype = numpy.find_common_type([linear_op.dtype, subspace.dtype], [])
+
+        super().__init__(dtype, shape)
+
+    def _matvec(self, x):
+        return self.operands[0].dot(self.operands[1].dot(x))
+
+    def _rmatvec(self, x):
+        return self.operands[1].T.dot(self.operands[0].T.dot(x))
+
+    def _matvec_cost(self):
+        return self.operands[0].matvec_cost + self.operands[1].matvec_cost
+
+
+class _ComposedSubspace(LinearSubspace):
+    def __init__(self, subspace1: LinearSubspace, subspace2: LinearSubspace):
+        """
+        Abstract representation of the composition of two linear subspaces.
+
+        :param subspace1: First subspace involved in the composition.
+        :param subspace2: Second subspace involved in the composition.
+        """
+        # Sanitize the subspaces attributes
+        if not isinstance(subspace1, LinearSubspace) or not isinstance(subspace2, LinearSubspace):
+            raise SubspaceError('Both operands must be instances of Subspace.')
+
+        # Check the operators compatibility
+        if subspace1.shape[1] != subspace2.shape[0]:
+            raise SubspaceError('Operands in composition have inconsistent shapes: {} and {}.'
+                                .format(subspace1.shape, subspace2.shape))
+
+        # Initialize operands attribute
+        self.operands = (subspace1, subspace2)
+
+        # Resulting shape (n, p) @ (p, m) -> (n, m)
+        shape = (subspace1.shape[0], subspace2.shape[1])
+        dtype = numpy.find_common_type([subspace1.dtype, subspace2.dtype], [])
+
+        super().__init__(dtype, shape)
+
+    def _matvec(self, x):
+        return self.operands[0].dot(self.operands[1].dot(x))
+
+    def _rmatvec(self, x):
+        return self.operands[1].T.dot(self.operands[0].T.dot(x))
+
+    def _matvec_cost(self):
+        return self.operands[0].matvec_cost + self.operands[1].matvec_cost
+
+
+class _AdjointSubspace(LinearSubspace):
+    def __init__(self, subspace: LinearSubspace):
+        """
+        Abstract representation of the adjoint of a linear operator.
+
+        :param subspace: Linear subspace to define the adjoint operator of.
+        """
+        # Sanitize the linear operator attribute
+        if not isinstance(subspace, LinearSubspace):
+            raise LinearOperatorError('Adjoint can only be defined for a LinearSubspace instance.')
+
+        n, p = subspace.shape
+
+        # Invert the _matvec and _rmatvec methods
+        self._matvec = subspace._rmatvec
+        self._rmatvec = subspace._matvec
+        self._matvec_cost = subspace._matvec_cost
+
+        super().__init__(subspace.dtype, (p, n))
+
+
+class Subspace(LinearSubspace):
+    def __init__(self, subspace: MatrixType):
+        """
+        Abstract class for the matrix representation of a linear subspace, that is a tuple of p vectors is size n,
+        represented as a rectangular matrix of shape (n, p).
+
+        :param subspace: Matrix representation of a linear subspace. Must be one of:
+            * numpy.ndarray
+            * scipy.sparse.spmatrix
+        """
+        # Sanitize the matrix attribute and check for potential sparse representation
+        if not isinstance(subspace, (numpy.ndarray, scipy.sparse.spmatrix)):
+            raise SubspaceError('Matrix representation requires a matrix-like format but received {}'
+                                .format(type(subspace)))
+
+        self.is_sparse = scipy.sparse.issparse(subspace)
+        self.subspace = subspace
+
+        super().__init__(subspace.dtype, subspace.shape)
+
+    def _matvec(self, x):
+        x = numpy.asanyarray(x)
+        return self.subspace.dot(x)
+
+    def _rmatvec(self, x):
+        x = numpy.asanyarray(x)
+        return self.subspace.T.dot(x)
+
+    def dot(self, x) -> MatrixType:
+        """
+        Override scipy.linalg.linearOperator dot method to handle cases of a sparse input.
+
+        :param x: Input vector, maybe represented in sparse format, to compute the dot product with.
+        """
+        if scipy.sparse.isspmatrix(x):
+            return self.subspace.dot(x)
+        else:
+            return super().dot(x)
+
+    def _matvec_cost(self):
+        return 2 * self.subspace.size
+
+
 class MatrixOperator(LinearOperator):
     def __init__(self, matrix: MatrixType):
         """
@@ -280,7 +543,7 @@ class MatrixOperator(LinearOperator):
         x = numpy.asanyarray(x)
         return self.matrix.H.dot(x)
 
-    def dot(self, x) -> [numpy.ndarray, scipy.sparse.spmatrix]:
+    def dot(self, x) -> MatrixType:
         """
         Override scipy.linalg.linearOperator dot method to handle cases of a sparse input.
 
@@ -295,10 +558,13 @@ class MatrixOperator(LinearOperator):
         return 2 * self.matrix.size
 
 
+SubspaceType = Union[LinearSubspace, numpy.ndarray, scipy.sparse.spmatrix]
+
+
 class Projector(LinearOperator):
     def __init__(self,
-                 V: MatrixType,
-                 W: MatrixType = None,
+                 V: SubspaceType,
+                 W: SubspaceType = None,
                  factorize: bool = False,
                  ip_B: LinearOperator = None):
         """
@@ -309,14 +575,14 @@ class Projector(LinearOperator):
         :param factorize: whether to compute a QR factorizations of the subspaces.
         """
         # Sanitize the subspaces arguments provided
-        if not isinstance(V, (numpy.ndarray, scipy.sparse.spmatrix)):
-            raise ProjectorError('Subspaces representation must be of matrix-like format but received {}'
+        if not isinstance(V, (LinearSubspace, numpy.ndarray, scipy.sparse.spmatrix)):
+            raise ProjectorError('Subspaces must be of matrix-like format but received {}'
                                  .format(type(V)))
 
         W = V if W is None else W
 
-        if not isinstance(W, (numpy.ndarray, scipy.sparse.spmatrix)):
-            raise ProjectorError('Subspaces representation must be of matrix-like format but received {}'
+        if not isinstance(W, (LinearSubspace, numpy.ndarray, scipy.sparse.spmatrix)):
+            raise ProjectorError('Subspaces must be of matrix-like format but received {}'
                                  .format(type(W)))
 
         if V.shape != W.shape:
@@ -334,14 +600,17 @@ class Projector(LinearOperator):
             self.L_factor, self.LT_factor = None, None
             self.Q, self.R = None, None
         else:
+            M = self.V.T @ ip_B @ self.W
+            if hasattr(M, 'mat'):
+                M = M.mat
+
             try:
-                M = inner(self.V, self.W, ip_B=ip_B)
                 self.L_factor = scipy.linalg.cho_factor(M, lower=True)
                 self.LT_factor = scipy.linalg.cho_factor(M, lower=False)
                 self.Q, self.R = None, None
                 self.VQ, self.WG = None, None
             except numpy.linalg.LinAlgError:
-                self.Q, self.R = qr(self.W.T @ self.V)
+                self.Q, self.R = qr(M)
                 self.L_factor, self.LT_factor = None, None
                 self.VQ, self.WG = None, None
 
@@ -390,11 +659,12 @@ class Projector(LinearOperator):
         return x - self.dot(x)
 
     def _matvec_cost(self):
-        if self.factorize:
-            return 4 * self.VQ.size
-        elif self.L_factor is not None:
-            return 2 * (self.V.size + self.W.size + self.L_factor[0].size)
-        elif self.Q is not None:
-            return 2 * (self.V.size + self.W.size + self.Q.size + self.R.size)
-        else:
-            raise ProjectorError('')
+        return 0.
+        # if self.factorize:
+        #     return 4 * self.VQ.size
+        # elif self.L_factor is not None:
+        #     return 2 * (self.V.size + self.W.size + self.L_factor[0].size)
+        # elif self.Q is not None:
+        #     return 2 * (self.V.size + self.W.size + self.Q.size + self.R.size)
+        # else:
+        #     raise ProjectorError('')
