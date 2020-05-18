@@ -13,14 +13,15 @@ import numpy
 import scipy.linalg
 import scipy.sparse
 
-from typing import Union
 from utils.linalg import norm
+from typing import Union, List
 from core.linop import LinearOperator, MatrixOperator, Projector, IdentityOperator
 from core.preconditioner import Preconditioner, IdentityPreconditioner, CoarseGridCorrection
 
 __all__ = ['LinearSystem', 'ConjugateGradient']
 
 Subspace = Union[numpy.ndarray, scipy.sparse.spmatrix]
+MultiPreconditioner = Union[Preconditioner, List[Preconditioner]]
 
 
 class LinearSystemError(Exception):
@@ -45,7 +46,7 @@ class LinearSystem(object):
     def __init__(self,
                  linear_op: LinearOperator,
                  rhs: numpy.ndarray,
-                 M: Preconditioner = None,
+                 M: MultiPreconditioner = None,
                  x_opt: numpy.ndarray = None):
         """
         Abstract representation for linear system of the form Ax = b, where A is a linear operator and b the right-hand
@@ -54,7 +55,7 @@ class LinearSystem(object):
 
         :param linear_op: Linear operator involved in the linear system.
         :param rhs: Right-hand side associated.
-        :param M: Preconditioner to be used to enhance solver convergence.
+        :param M: Preconditioner or list of Preconditioner to be used to enhance solver convergence.
         :param x_opt: Solution of the linear system if available.
         """
         # Sanitize the linear operator attribute
@@ -75,8 +76,14 @@ class LinearSystem(object):
         # Sanitize the preconditioner attribute
         M = IdentityPreconditioner(linear_op) if M is None else M
 
-        if not isinstance(M, Preconditioner):
+        if isinstance(M, list) and not numpy.all([isinstance(M_i, Preconditioner) for M_i in M]):
+            raise LinearSystemError('List of preconditioners must solely contain instances of Preconditioner.')
+
+        if not isinstance(M, list) and not isinstance(M, Preconditioner):
             raise LinearSystemError('Preconditioner must be an instance of Preconditioner.')
+
+        if isinstance(M, list) and len(M) != rhs.shape[1]:
+            raise LinearSystemError('There must be as many Preconditioners as right-hand side, if several provided.')
 
         self.M = M
 
@@ -110,22 +117,6 @@ class LinearSystem(object):
             raise LinearSystemError('Cannot compute error norm since linear system solution is not known.')
 
         return numpy.linalg.norm(x - self.x_opt)
-
-    def perturb(self, epsilon):
-        """
-        Compute a modified linear system via a random perturbation of the linear operator and the right-hand side.
-
-        :param epsilon: Magnitude of the perturbation
-        """
-        if not isinstance(self.linear_op, MatrixOperator):
-            raise LinearSystemError('Perturbation can only be applied to linear systems involving a MatrixOperator.')
-
-        normalization = numpy.linalg.norm(self.linear_op.matrix.diagonal())
-
-        A_ = self.linear_op + epsilon * normalization * MatrixOperator(scipy.sparse.eye(self.rhs.size))
-        b_ = self.rhs + epsilon * normalization * numpy.random.randn(self.rhs.size, 1)
-
-        return LinearSystem(A_, b_)
 
     def __repr__(self) -> str:
         """
@@ -187,14 +178,17 @@ class _IterativeSolver(object):
 
         self.maxiter = maxiter
 
-    def _initialize(self):
-        raise NotImplemented('Iterative solver must implement a _initialize method.')
+        self.residue_norms = list()
+        self.N = 0
 
-    def _finalize(self):
-        raise NotImplemented('Iterative solver must implement a _finalize method.')
+        self._solve()
+        self._finalize()
 
     def _solve(self):
         raise NotImplemented('Iterative solver must implement a _solve method.')
+
+    def _finalize(self):
+        raise NotImplemented('Iterative solver must implement a _finalize method.')
 
 
 class ConjugateGradient(_IterativeSolver):
@@ -213,30 +207,23 @@ class ConjugateGradient(_IterativeSolver):
         :param maxiter: Maximum number of iterations affordable before stopping the method.
         :param store_arnoldi: Whether or not storing the Arnoldi relation elements.
         """
-        # Instantiate iterative solver base class
-        super().__init__(linear_system,
-                         x0=x0,
-                         tol=tol,
-                         maxiter=maxiter)
-
+        # Sanitize the linear system argument
         if linear_system.linear_op.shape[0] != linear_system.linear_op.shape[1]:
             raise AssumptionError('Conjugate Gradient only apply to squared operators.')
 
         if linear_system.block:
             raise AssumptionError('Conjugate Gradient only apply to single right-hand side.')
 
-        # Get initial residues
-        self.residue_norms = list()
-        self.N = 0
-
         # Sanitize the Arnoldi relation storage argument
         self.store_arnoldi = store_arnoldi
         self.H = dict(alpha=[], beta=[]) if store_arnoldi else None
         self.V = list() if store_arnoldi else None
 
-        # Conjugate Gradient method run
-        self._solve()
-        self._finalize()
+        # Instantiate iterative solver base class
+        super().__init__(linear_system,
+                         x0=x0,
+                         tol=tol,
+                         maxiter=maxiter)
 
     def _solve(self) -> None:
         """
@@ -293,7 +280,7 @@ class ConjugateGradient(_IterativeSolver):
         """
 
         # Get residuals and iterations cost and scale back the residuals
-        self.residue_norms = self.residue_norms
+        self.residue_norms = numpy.asarray(self.residue_norms) / self.residue_norms[0]
 
         # Compute the Arnoldi tridiagonal matrix coefficient if it was required
         if self.store_arnoldi:
@@ -333,7 +320,7 @@ class ConjugateGradient(_IterativeSolver):
 class DeflatedConjugateGradient(ConjugateGradient):
     def __init__(self,
                  linear_system: LinearSystem,
-                 Z: Subspace,
+                 subspace: Subspace,
                  factorize: bool = False,
                  x0: numpy.ndarray = None,
                  tol: float = 1e-5,
@@ -343,6 +330,8 @@ class DeflatedConjugateGradient(ConjugateGradient):
         Abstract class for the (Preconditioned) Conjugate Gradient algorithm implementation.
 
         :param linear_system: Linear system to be solved.
+        :param subspace: matrix representation of subspace to use for deflation.
+        :param factorize: either to process a factorization of the subspace matrix.
         :param x0: Initial guess for the linear system solution.
         :param tol: Relative tolerance threshold under which the algorithm is stopped.
         :param maxiter: Maximum number of iterations affordable before stopping the method.
@@ -354,7 +343,7 @@ class DeflatedConjugateGradient(ConjugateGradient):
         M = linear_system.M
 
         # Compute deflated linear system
-        self.P = Projector(Z, factorize=factorize, ip_B=A)
+        self.P = Projector(subspace, factorize=factorize, ip_B=A)
         deflated_A = A @ (IdentityOperator(b.size) - self.P)
         deflated_b = b - self.P.T.dot(b)
         deflated_linsys = LinearSystem(deflated_A, deflated_b, M)
@@ -362,195 +351,147 @@ class DeflatedConjugateGradient(ConjugateGradient):
         # Adjust tolerance
         tol = tol * norm(b, ip_B=M) / norm(deflated_b, ip_B=M)
 
-        Q = CoarseGridCorrection(A, Z)
+        # Instantiate conjugate gradient base class
         super().__init__(deflated_linsys, x0, tol, maxiter, store_arnoldi)
 
+        # Correction of the deflated solution to get initial linear system solution
+        Q = CoarseGridCorrection(A, subspace)
         self.xk = Q.dot(b) + self.P.apply_complement(self.xk)
 
 
-# class BlockConjugateGradient(_IterativeSolver):
-#     """
-#     Abstract class to implement the Block Conjugate Gradient method with possible use of
-#     preconditioner.
-#     """
-#
-#     def __init__(self,
-#                  linear_system: LinearSystem,
-#                  x0: numpy.ndarray = None,
-#                  M: Preconditioner = None,
-#                  buffer: int = 0,
-#                  tol: float = 1e-5,
-#                  rank_tol: float = 1e-5):
-#         """
-#         Constructor of the ConjugateGradient class.
-#
-#         :param linear_system: LinearSystem to solve.
-#         :param x0: Initial guess of the linear system.
-#         :param M: Preconditioner to use during the resolution.
-#         :param tol: Relative tolerance to achieve before stating convergence.
-#         :param buffer: Size of the buffer memory.
-#         :param rank_tol: Maximum ratio of extrema singular values accepted to consider full rank.
-#         """
-#
-#         # Sanitize the linear system attribute
-#         if not hasattr(linear_system.linear_op, 'def_pos'):
-#             raise IterativeSolverError('Block Conjugate Gradient only dot to s.d.p linear map.')
-#
-#         if linear_system.linear_op.shape[0] != linear_system.linear_op.shape[1]:
-#             raise IterativeSolverError('Block Conjugate Gradient only dot to square problems.')
-#
-#         if not linear_system.block:
-#             raise IterativeSolverError('Block Conjugate Gradient only dot to block right-hand side.')
-#
-#         self.buffer = buffer
-#         self.total_cost = 0
-#         self.rank_tol = rank_tol
-#
-#         super().__init__(linear_system, x0, M, tol, linear_system.shape[0])
-#
-#         # Sanitize the preconditioner attribute
-#         if not isinstance(self.M_i, Preconditioner):
-#             raise IterativeSolverError('Conjugate Gradient can handle only one preconditioner.')
-#
-#     def _initialize(self):
-#         """
-#         Initialization of the Block Conjugate Gradient method. Namely compute the initial block
-#         residue R_0, block descent direction P_0, and block preconditioned residual Z_0.
-#         """
-#         n, k = self.x0.shape
-#
-#         # Initialize the algorithm with scaled residual R_0, then Z_0 and P_0
-#         R = self.linear_system.get_residual(self.x0) / self.linear_system.scaling
-#
-#         # Detect rank deficiency in the initial block residue with QR-SVD
-#         r = scipy.linalg.qr(R, mode='r')[0]
-#         s = scipy.linalg.svd(r, compute_uv=False)
-#         effective_rank = numpy.sum(s * (1 / s[0]) > self.rank_tol)
-#         eps_rank = s[-1] / s[0]
-#
-#         Z = self.M_i.dot(R[:, :effective_rank])
-#         P = numpy.copy(Z)
-#
-#         # Aggregate as auxiliaries quantities
-#         auxiliaries = [Z, P, R]
-#
-#         # Initial residual in max norm
-#         residue = max(numpy.linalg.norm(R[:, :effective_rank], axis=0))
-#         cost = k * (self.linear_system.linear_op.matvec_cost + self.M_i.matvec_cost)
-#         cost += 2*n*k**2 + 2*k**3
-#
-#         # Aggregate as history quantities
-#         history = [residue, cost, effective_rank, eps_rank]
-#
-#         # Scale the tolerance and update total cost
-#         self.tol *= residue
-#         self.total_cost += cost
-#
-#         return _SolverMonitor(history, auxiliaries=auxiliaries, buffer=self.buffer)
-#
-#     def _finalize(self) -> None:
-#         """
-#         Finalize the Block Conjugate Gradient algorithm by post-processing the data aggregated
-#         during the run and making up the output dictionary gathering all the final values.
-#         """
-#
-#         # Get residuals and iterations cost and scale back the residuals
-#         residues, cost, rank, eps_rank = self.monitor.get_history()
-#         residues *= numpy.linalg.norm(self.linear_system.scaling)
-#
-#         # Get the available auxiliaries, depending on the buffer content
-#         Z, P, R = self.monitor.get_auxiliaries()
-#
-#         # Make up the report line to print
-#         report = self.monitor.report('Block Conjugate Gradient', residues[0], residues[-1])
-#
-#         # Make up the output dictionary with all final values
-#         output = dict(report=report,
-#                       x_opt=self.x0 + self.x * self.linear_system.scaling,
-#                       n_iterations=self.monitor.n_it,
-#                       residues=residues,
-#                       cost=cost,
-#                       z=Z,
-#                       p=P,
-#                       r=R)
-#
-#         self.output = output
-#
-#     def _iteration_cost(self, alpha) -> float:
-#         """
-#         Details the Flops counting for one iteration of the Block Conjugate Gradient.
-#
-#         :param alpha: Matrix equal to (P^T * A * P)^(-1) * (Z^T * R) which size gives the number
-#         of not yet converged columns and rank deficiency.
-#         """
-#
-#         n, k = self.linear_system.rhs.shape
-#         r, c = alpha.shape
-#         total_cost = 0
-#
-#         total_cost += self.linear_system.linear_op.matvec_cost * r    # Q_k
-#         total_cost += 2*n*r**2                              # delta
-#         total_cost += 26*r**3                               # SVD of delta
-#         total_cost += r                                     # s_inv
-#         total_cost += 2*(r*n*c + 3*r*r*c)                   # alpha
-#         total_cost += n*c + 2*r*n*c                         # self.x
-#         total_cost += n*c + 2*r*n*c                         # R_k
-#         total_cost += 2*n*r**2                              # residue
-#         total_cost += self.M_i.matvec_cost                   # Z_k
-#         total_cost += 2*(r*n*r + 3*r*r*k)                   # beta
-#         total_cost += 2*n*r*r + n*r                         # P_k
-#
-#         return total_cost
-#
-#     def run(self, verbose=False):
-#         """
-#         Method to actually run the Block Conjugate Gradient algorithm. At of the run the end, it
-#         update its own output attribute with the final values found.
-#         """
-#
-#         for k in range(self.maxiter):
-#             # Retrieve last iterates quantities
-#             Z, P, R = self.monitor.get_previous()
-#
-#             Q_k = self.linear_system.linear_op.dot(P)
-#
-#             # SVD decomposition of P^T*A*P
-#             delta = P.T.dot(Q_k)
-#             u, sigma, v = numpy.linalg.svd(delta)
-#
-#             # Determination of numerical rank with given tolerance
-#             rank = numpy.sum((sigma > sigma[0] * self.rank_tol))
-#
-#             # Pseudo inverse singular values
-#             sigma_inv = numpy.zeros_like(sigma)
-#             sigma_inv[:rank] = 1 / sigma[:rank]
-#
-#             # Spot not yet converged columns to determine the remaining active ones
-#             residues = numpy.linalg.norm(R, axis=0)
-#             active_cols = residues > self.tol
-#
-#             # Computation of A-conjugation corrector alpha
-#             alpha = v.T @ numpy.diag(sigma_inv) @ u.T @ Z.T.dot(R[:, active_cols])
-#
-#             # Update of active iterate
-#             self.x[:, active_cols] += P.dot(alpha)
-#             R[:, active_cols] -= Q_k.dot(alpha)
-#
-#             # Update historic data
-#             residue = max(residues)
-#             self.total_cost += self._iteration_cost(alpha)
-#
-#             # Break whenever max norm tolerance is reached
-#             if residue < self.tol:
-#                 self.monitor.update([residue, self.total_cost, rank, 1], [])
-#                 break
-#
-#             Z = self.M_i.dot(R[:, active_cols])
-#
-#             beta = - v.T @ numpy.diag(sigma_inv) @ u.T @ Q_k.T.dot(Z)
-#             P = Z + P.dot(beta)
-#
-#             self.monitor.update([residue, self.total_cost, rank, 1], [Z, P, R])
-#
-#         # Sanitize the output elements
-#         self._finalize()
+class BlockConjugateGradient(_IterativeSolver):
+    """
+    Abstract class to implement the Block Conjugate Gradient method with possible use of
+    preconditioner.
+    """
+
+    def __init__(self,
+                 linear_system: LinearSystem,
+                 x0: numpy.ndarray = None,
+                 tol: float = 1e-5,
+                 maxiter: int = None,
+                 store_arnoldi: bool = False,
+                 rank_tol: float = 1e-10):
+        """
+        Constructor of the ConjugateGradient class.
+
+        :param linear_system: LinearSystem to solve.
+        :param x0: Initial guess of the linear system.
+        :param tol: Relative tolerance to achieve before stating convergence.
+        :param rank_tol: Maximum ratio of extrema singular values accepted to consider full rank.
+        """
+        # Check if Block Conjugate Gradient assumptions are satisfied
+        if linear_system.linear_op.shape[0] != linear_system.linear_op.shape[1]:
+            raise AssumptionError('Block Conjugate Gradient only apply to squared operators.')
+
+        if not linear_system.block:
+            raise AssumptionError('Block Conjugate Gradient only apply to single right-hand side.')
+
+        # Initialize BCG parameters
+        self.scaling = None
+        self.rank_tol = rank_tol
+
+        # Sanitize the Arnoldi relation storage argument
+        self.store_arnoldi = store_arnoldi
+        self.H = dict(alpha=[], beta=[]) if store_arnoldi else None
+        self.V = list() if store_arnoldi else None
+
+        # Instantiate iterative solver base class
+        super().__init__(linear_system,
+                         x0=x0,
+                         tol=tol,
+                         maxiter=maxiter)
+
+    def _solve(self) -> None:
+        """
+        Run the Block Conjugate Gradient method.
+        """
+        k = 0
+
+        # Initialize the algorithm with scaled residual R_0, then Z_0 and P_0
+        if isinstance(self.M, list):
+            self.scaling = numpy.asarray([norm(self.linear_system.rhs[:, [i]], ip_B=self.M[i]) for i in range(len(self.M))])
+        else:
+            self.scaling = norm(self.linear_system.rhs, ip_B=self.M)
+
+        Rk = self.linear_system.get_residual(self.x0) / self.scaling
+
+        if isinstance(self.M, list):
+            Zk = numpy.hstack([self.M[i].dot(Rk[:, [i]]) for i in range(Rk.shape[1])])
+        else:
+            Zk = self.M.dot(Rk)
+
+        Pk = numpy.copy(Zk)
+
+        rhos = list([Zk.T @ Rk])
+        self.residue_norms.append(numpy.diag(rhos[-1])**0.5)
+        active_cols = self.residue_norms[-1] > self.tol
+
+        while max(self.residue_norms[-1]) > self.tol and k < self.maxiter:
+            Qk = self.linear_system.linear_op.dot(Pk)
+            delta = Pk.T.dot(Qk)
+
+            # Computation of A-conjugation corrector alpha
+            U, sigma, V = scipy.linalg.svd(delta)
+            effective_rank = numpy.sum(sigma / sigma[0] > self.rank_tol)
+            sigma_inv = numpy.zeros_like(sigma)
+            sigma_inv[:effective_rank] = 1 / sigma[:effective_rank]
+            alpha = V.T @ numpy.diag(sigma_inv) @ U.T @ Zk.T @ Rk
+
+            # Update of active iterate
+            self.yk += Pk.dot(alpha)
+            Rk -= Qk.dot(alpha)
+
+            if isinstance(self.M, list):
+                for i in range(Zk.shape[1]):
+                    if active_cols[i]:
+                        Zk[:, [i]] = self.M[i].dot(Rk[:, [i]])
+            else:
+                Zk = self.M.dot(Rk)
+
+            rhos.append(Zk.T @ Rk)
+            self.residue_norms.append(numpy.diag(rhos[-1]) ** 0.5)
+
+            # print(V.shape, U.shape, Zk[:, active_cols].shape, Qk.shape)
+            beta = - V.T @ numpy.diag(sigma_inv) @ U.T @ Zk.T @ Qk
+            Pk = Zk + Pk.dot(beta)
+            active_cols = self.residue_norms[-1] > self.tol
+
+            k = k + 1
+
+        self.xk = self.x0 + self.yk
+        self.N = k
+
+    def _finalize(self) -> None:
+        """
+        Finalize the Block Conjugate Gradient algorithm by post-processing the data aggregated
+        during the run and making up the output dictionary gathering all the final values.
+        """
+
+        # Get residuals and iterations cost and scale back the residuals
+
+    def _iteration_cost(self, alpha) -> float:
+        """
+        Details the Flops counting for one iteration of the Block Conjugate Gradient.
+
+        :param alpha: Matrix equal to (P^T * A * P)^(-1) * (Z^T * R) which size gives the number
+        of not yet converged columns and rank deficiency.
+        """
+
+        n, k = self.linear_system.rhs.shape
+        r, c = alpha.shape
+        total_cost = 0
+
+        total_cost += self.linear_system.linear_op.matvec_cost * r    # Q_k
+        total_cost += 2*n*r**2                              # delta
+        total_cost += 26*r**3                               # SVD of delta
+        total_cost += r                                     # s_inv
+        total_cost += 2*(r*n*c + 3*r*r*c)                   # alpha
+        total_cost += n*c + 2*r*n*c                         # self.x
+        total_cost += n*c + 2*r*n*c                         # R_k
+        total_cost += 2*n*r**2                              # residue
+        total_cost += self.M.matvec_cost                   # Z_k
+        total_cost += 2*(r*n*r + 3*r*r*k)                   # beta
+        total_cost += 2*n*r*r + n*r                         # P_k
+
+        return total_cost
