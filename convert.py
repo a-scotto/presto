@@ -9,12 +9,14 @@ Created on August 22, 2019 at 14:04.
 Description:
 """
 
+import os
+import numpy
 import pickle
-import fnmatch
 import argparse
+import scipy.io
+import scipy.sparse
 
-from utils.operator import TestOperator
-
+from core.linop import MatrixOperator
 
 # Parse command line argument
 parser = argparse.ArgumentParser()
@@ -24,25 +26,30 @@ parser.add_argument('files',
 
 args = parser.parse_args()
 
-# Filter the content of the folder to select only the .mat files
-operators_files = fnmatch.filter(args.files, '*.*')
-
-for OPERATOR_PATH in operators_files:
+for FILE_PATH in args.files:
 
     # Skip .mat files containing SVD decomposition
-    if OPERATOR_PATH.endswith('_SVD.mat'):
+    if not FILE_PATH.endswith('.mat'):
         continue
 
-    if not OPERATOR_PATH.endswith('.mat') and not OPERATOR_PATH.endswith('.npz'):
-        continue
+    mat = scipy.io.loadmat(FILE_PATH)['Problem']
 
-    # Extract content
-    print('Extracting from {}... '.format(OPERATOR_PATH))
-    operator = TestOperator(OPERATOR_PATH)
-    print('Done.')
+    while len(mat) == 1:
+        mat = mat[0]
 
-    name = operator['name']
+    for item in mat:
+        if scipy.sparse.isspmatrix(item):
+            mat = MatrixOperator(item)
+            break
 
-    with open('operators/' + str(name) + '.opr', 'wb') as file:
+    name, _ = os.path.basename(FILE_PATH).split('.')
+
+    with open('problems/' + name, 'wb') as file:
         p = pickle.Pickler(file)
-        p.dump(operator)
+        p.dump(mat)
+
+    rhs = input('Generate random right-hand side? [y/n] ... ')
+
+    if rhs == 'y':
+        b = mat.dot(numpy.random.randn(mat.shape[0], 1))
+        numpy.save('problems/' + name + '_rhs', b)
