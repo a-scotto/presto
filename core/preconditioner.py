@@ -15,11 +15,14 @@ import scipy.linalg
 import scipy.sparse.linalg
 import pyamg.relaxation.relaxation
 
-from core.linop import LinearOperator, MatrixOperator
+from typing import Union
+from core.linop import LinearOperator, MatrixOperator, LinearSubspace, Subspace
 
 __all__ = ['IdentityPreconditioner', 'Jacobi', 'BlockJacobi', 'SymmetricGaussSeidel', 'BlockSymmetricGaussSeidel',
            'AlgebraicMultiGrid', 'CoarseGridCorrection', 'LimitedMemoryPreconditioner', 'PreconditionerGenerator',
            'Preconditioner']
+
+SubspaceType = Union[LinearSubspace, numpy.ndarray, scipy.sparse.spmatrix]
 
 
 class PreconditionerError(Exception):
@@ -363,7 +366,7 @@ class AlgebraicMultiGrid(Preconditioner):
 
 
 class CoarseGridCorrection(Preconditioner):
-    def __init__(self, linear_op: LinearOperator, subspace: object, rank_tol: float = 1e-10):
+    def __init__(self, linear_op: LinearOperator, subspace: SubspaceType, rank_tol: float = 1e-10):
         """
         Abstract representation for Coarse-Grid Correction preconditioner. Formally, for a given subspace S, and linear
         operator A, the coarse-grid correction has the following closed form:
@@ -375,40 +378,19 @@ class CoarseGridCorrection(Preconditioner):
         :param rank_tol: Numerical rank tolerance to state a rank deficiency of the subspace.
         """
         # Sanitize the subspace attribute
-        if not isinstance(subspace, (numpy.ndarray, scipy.sparse.spmatrix)):
+        if not isinstance(subspace, (LinearSubspace, numpy.ndarray, scipy.sparse.spmatrix)):
             raise PreconditionerError('Subspace should either be numpy.ndarray or scipy.sparse.spmatrix.')
 
-        if subspace.ndim != 2:
-            subspace = subspace.reshape(-1, 1)
+        if not isinstance(subspace, LinearSubspace):
+            subspace = Subspace(subspace)
 
-        if subspace.shape[0] < subspace.shape[1]:
-            subspace = subspace.T
-
-        sparse_subspace = scipy.sparse.isspmatrix(subspace)
-
-        # Process QR factorization of the subspace when not of sparse format
-        if not sparse_subspace:
-            q, r = scipy.linalg.qr(subspace, mode='economic')
-            s = scipy.linalg.svd(r, compute_uv=False)
-
-            # Potentially decrease the effective rank of S
-            rank = numpy.sum(s * (1 / s[0]) > rank_tol)
-
-            if rank < subspace.shape[1]:
-                Warning('Subspace provided for correction is rank deficient.')
-
-            self._subspace = q[:, :rank]
-        else:
-            self._subspace = subspace
+        self._subspace = subspace
 
         # Compute the Galerkin operator S^T @ A @ S
-        self._reduced_linear_op = self._subspace.T.dot(linear_op.dot(self._subspace))
-
-        if sparse_subspace:
-            self._reduced_linear_op = self._reduced_linear_op.todense()
+        self._reduced_linear_op = self._subspace.T @ linear_op @ self._subspace
 
         # Cholesky decomposition of the reduced operator
-        self._cho_factor = scipy.linalg.cho_factor(self._reduced_linear_op,
+        self._cho_factor = scipy.linalg.cho_factor(self._reduced_linear_op.mat,
                                                    lower=True,
                                                    overwrite_a=False)
 
@@ -424,7 +406,7 @@ class CoarseGridCorrection(Preconditioner):
 
     def _matvec_cost(self):
         _, k = self._subspace.shape
-        return 4 * self._subspace.size + 2 * k**2
+        return 2 * self._subspace.matvec_cost + 2 * k**2
 
     def _construction_cost(self):
         n, k = self._subspace.shape
@@ -435,7 +417,7 @@ class CoarseGridCorrection(Preconditioner):
 
 
 class LimitedMemoryPreconditioner(Preconditioner):
-    def __init__(self, linear_op: LinearOperator, subspace: object, M: Preconditioner = None):
+    def __init__(self, linear_op: LinearOperator, subspace: SubspaceType, M: Preconditioner = None):
         """
         Abstract representation for Limited Memory Preconditioner (LMP). Formally, for Q being the Coarse-Grid
         correction operator defined with subspace S, linear operator A, and first-level preconditioner M, it has the
