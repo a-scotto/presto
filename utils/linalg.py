@@ -11,9 +11,13 @@ Description:
 
 import numpy
 import scipy
+
+from typing import Union, Tuple
 from scipy.sparse.linalg import LinearOperator
 
 __all__ = ['inner', 'norm', 'qr', 'angles']
+
+MatrixType = Union[numpy.ndarray, scipy.sparse.spmatrix]
 
 
 class LinearAlgebraError(Exception):
@@ -22,15 +26,13 @@ class LinearAlgebraError(Exception):
     """
 
 
-def inner(V: numpy.ndarray, W: numpy.ndarray, ip_B: LinearOperator = None) -> numpy.ndarray:
+def inner(V: MatrixType, W: MatrixType, ip_B: LinearOperator = None) -> numpy.ndarray:
     """
     Euclidean and non-Euclidean inner product.
 
-    numpy.vdot only works for vectors and numpy.dot does not use the conjugate transpose.
-
-    :param V: numpy array with ``shape==(n, m)``
-    :param W: numpy array with ``shape==(n, p)``
-    :param ip_B: Inner product, a self-adjoint, positive-definite linear operator.
+    :param V: matrix with shape (n, m).
+    :param W: matrix with shape (n, p).
+    :param ip_B: inner product, a self-adjoint, positive-definite linear operator.
     """
     if not V.shape[0] == W.shape[0]:
         raise LinearAlgebraError('V and W have inconsistent shapes: {} and {}'.format(V.shape, W.shape))
@@ -39,9 +41,9 @@ def inner(V: numpy.ndarray, W: numpy.ndarray, ip_B: LinearOperator = None) -> nu
         raise LinearAlgebraError('Inner product must be a LinearOperator instance.')
 
     if ip_B is not None:
-        V = ip_B.dot(V)
-
-    inner_product = V.T.conj() @ W
+        inner_product = ip_B.dot(V).T @ W
+    else:
+        inner_product = V.T @ W
 
     if scipy.sparse.isspmatrix(inner_product):
         inner_product = inner_product.todense()
@@ -49,29 +51,27 @@ def inner(V: numpy.ndarray, W: numpy.ndarray, ip_B: LinearOperator = None) -> nu
     return inner_product
 
 
-def norm(x: numpy.ndarray, ip_B: LinearOperator = None) -> float:
+def norm(x: MatrixType, ip_B: LinearOperator = None) -> Union[float, numpy.ndarray]:
     """
     Compute norm (Euclidean and non-Euclidean).
 
-    :param x: a 2-dimensional ``numpy.array``.
-    :param ip_B: see :py:meth:`inner`.
+    :param x: a 2-dimensional matrix object.
+    :param ip_B: inner product, a self-adjoint, positive-definite linear operator.
     """
-    ip = inner(x, x, ip_B=ip_B)
+    if x.ndim == 1 or x.shape[1] == 1:
+        return float(inner(x, x, ip_B=ip_B))**0.5
+    else:
+        norms = [float(inner(x[:, [i]], x[:, [i]], ip_B=ip_B)**0.5) for i in range(x.shape[1])]
+        return numpy.asarray(norms)
 
-    return float(ip)**0.5
 
+def qr(X: MatrixType, ip_B: LinearOperator = None, passes: int = 1) -> Tuple[numpy.ndarray, numpy.ndarray]:
+    """
+    QR factorization with customizable inner product.
 
-def qr(X, ip_B=None, reorthos=1):
-    """QR factorization with customizable inner product.
-
-    :param X: array with ``shape==(N,k)``
-    :param ip_B: (optional) inner product, see :py:meth:`inner`.
-    :param reorthos: (optional) numer of reorthogonalizations. Defaults to
-      1 (i.e. 2 runs of modified Gram-Schmidt) which should be enough in most
-      cases (TODO: add reference).
-
-    :return: Q, R where :math:`X=QR` with :math:`\\langle Q,Q \\rangle=I_k` and
-      R upper triangular.
+    :param X: matrix with shape (N,k).
+    :param ip_B: inner product, a self-adjoint, positive-definite linear operator.
+    :param passes: number of re-orthogonalizations.
     """
     if scipy.sparse.isspmatrix(X):
         X = X.todense()
@@ -79,11 +79,11 @@ def qr(X, ip_B=None, reorthos=1):
     if ip_B is None and X.shape[1] > 0:
         return scipy.linalg.qr(X, mode='economic')
     else:
-        (N, k) = X.shape
+        _, k = X.shape
         Q = X.copy()
         R = numpy.zeros((k, k), dtype=X.dtype)
         for i in range(k):
-            for reortho in range(reorthos+1):
+            for _ in range(passes+1):
                 for j in range(i):
                     alpha = inner(Q[:, [j]], Q[:, [i]], ip_B=ip_B)[0, 0]
                     R[j, i] += alpha
