@@ -43,13 +43,13 @@ class LinearOperator(scipyLinearOperator):
         :param dtype: Type of the elements in the linear operator.
         :param shape: Shape of the linear operator, i.e. the tuple (n, p) such that the linear operator maps R^n to R^p.
         """
-        # Sanitize the data type attribute
+        # Sanitize the data type argument
         try:
             self.dtype = numpy.dtype(dtype)
         except TypeError:
             raise LinearOperatorError('dtype provided not understood.')
 
-        # Sanitize the shape attribute
+        # Sanitize the shape argument
         if not isinstance(shape, tuple) or len(shape) != 2:
             if not isinstance(shape[0], int) or not isinstance(shape[1], int):
                 raise LinearOperatorError('Shape must be a tuple of integers of the form (n, p).')
@@ -125,11 +125,11 @@ class _ScaledLinearOperator(LinearOperator):
         :param linear_op: Linear operator involved in the external multiplication.
         :param scalar: Scalar involved in the external multiplication.
         """
-        # Sanitize the linear operator attribute
+        # Sanitize the linear operator argument
         if not isinstance(linear_op, LinearOperator):
             raise LinearOperatorError('External product should involve an instance of LinearOperator.')
 
-        # Sanitize the scalar attribute
+        # Sanitize the scalar argument
         if not numpy.isscalar(scalar):
             raise LinearOperatorError('External product should involve a scalar.')
 
@@ -162,7 +162,7 @@ class _SummedLinearOperator(LinearOperator):
         :param linear_op1: First linear operator involved in the summation.
         :param linear_op2: Second linear operator involved in the summation.
         """
-        # Sanitize the linear operators attributes
+        # Sanitize the linear operators arguments
         if not isinstance(linear_op1, LinearOperator) or not isinstance(linear_op2, LinearOperator):
             raise LinearOperatorError('Both operands in summation must be instances of LinearOperator.')
 
@@ -200,7 +200,7 @@ class _ComposedLinearOperator(LinearOperator):
         :param linear_op1: First linear operator involved in the composition.
         :param linear_op2: Second linear operator involved in the composition.
         """
-        # Sanitize the linear operators attributes
+        # Sanitize the linear operators arguments
         if not isinstance(linear_op1, LinearOperator) or not isinstance(linear_op2, LinearOperator):
             raise LinearOperatorError('Both operands in composition must be instances of LinearOperator.')
 
@@ -238,7 +238,7 @@ class _AdjointLinearOperator(LinearOperator):
 
         :param linear_op: Linear operator to define the adjoint operator of.
         """
-        # Sanitize the linear operator attribute
+        # Sanitize the linear operator argument
         if not isinstance(linear_op, LinearOperator):
             raise LinearOperatorError('Adjoint can only be defined for a LinearOperator instance.')
 
@@ -309,7 +309,7 @@ class _SummedSubspace(LinearSubspace):
         :param subspace1: First subspace involved in the summation.
         :param subspace2: Second subspace involved in the summation.
         """
-        # Sanitize the subspaces attributes
+        # Sanitize the subspaces arguments
         if not isinstance(subspace1, LinearSubspace) or not isinstance(subspace2, LinearSubspace):
             raise SubspaceError('Both operands in summation must be instances of LinearSubspace.')
 
@@ -363,7 +363,7 @@ class _ImageSubspace(LinearSubspace):
         :param linear_op: Linear operator to be acting on the given subspace.
         :param subspace: Subspace which image is considered.
         """
-        # Sanitize the linear operator and subspace attributes
+        # Sanitize the linear operator and subspace arguments
         if not isinstance(linear_op, LinearOperator) or not isinstance(subspace, LinearSubspace):
             raise SubspaceError('Image of a subspace requires instances of LinearOperator and LinearSubspace.')
 
@@ -401,7 +401,7 @@ class _AdjointSubspace(LinearSubspace):
 
         :param subspace: Linear subspace to define the adjoint operator of.
         """
-        # Sanitize the linear subspace attribute
+        # Sanitize the linear subspace argument
         if not isinstance(subspace, LinearSubspace):
             raise LinearOperatorError('Adjoint must be defined from a LinearSubspace instance.')
 
@@ -430,7 +430,7 @@ class IdentityOperator(LinearOperator):
 
         :param n: Dimension of the vector space identity operator.
         """
-        # Sanitize the order attribute
+        # Sanitize the order argument
         if not isinstance(n, int) or n < 1:
             raise LinearOperatorError('Impossible to define the identity operator of a vector space of dimension {}.'
                                       .format(n))
@@ -459,7 +459,7 @@ class MatrixOperator(LinearOperator):
             * numpy.ndarray
             * scipy.sparse.spmatrix
         """
-        # Sanitize the matrix attribute and check for potential sparse representation
+        # Sanitize the matrix argument and check for potential sparse representation
         if not isinstance(matrix, (numpy.ndarray, scipy.sparse.spmatrix)):
             raise LinearOperatorError('Matrix representation requires a matrix-like format but received {}'
                                       .format(type(matrix)))
@@ -505,7 +505,7 @@ class Subspace(LinearSubspace):
             * numpy.ndarray
             * scipy.sparse.spmatrix
         """
-        # Sanitize the matrix attribute and check for potential sparse representation
+        # Sanitize the matrix argument and check for potential sparse representation
         if not isinstance(subspace, (numpy.ndarray, scipy.sparse.spmatrix)):
             raise SubspaceError('Matrix representation requires a matrix-like format but received {}'
                                 .format(type(subspace)))
