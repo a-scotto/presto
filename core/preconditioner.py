@@ -16,7 +16,7 @@ import scipy.sparse.linalg
 import pyamg.relaxation.relaxation
 
 from typing import Union
-from core.linop import LinearOperator, MatrixOperator, LinearSubspace, Subspace
+from core.algebra import *
 
 __all__ = ['IdentityPreconditioner', 'Jacobi', 'BlockJacobi', 'SymmetricGaussSeidel', 'BlockSymmetricGaussSeidel',
            'AlgebraicMultiGrid', 'CoarseGridCorrection', 'LimitedMemoryPreconditioner', 'PreconditionerGenerator',
@@ -42,18 +42,25 @@ class Preconditioner(LinearOperator):
 
         :param linear_op: Linear operator to which the preconditioner is related.
         """
-        # Sanitize the linear_op attribute
+        # Sanitize the linear operator argument
         if not isinstance(linear_op, LinearOperator):
             raise PreconditionerError('Linear operator must be an instance of LinearOperator.')
 
         self.linear_op = linear_op
 
-        super().__init__(linear_op.shape, linear_op.dtype)
+        super().__init__(linear_op.dtype, linear_op.shape)
 
-        self.construction_cost = self._construction_cost()
+        try:
+            self.construction_cost = self._construction_cost()
+        except NotImplementedError:
+            self.construction_cost = numpy.Inf
 
     def _construction_cost(self):
-        return None
+        """
+        Method to get the computational cost of the construction of the preconditioner.
+        """
+        raise NotImplementedError('Method _construction_cost not implemented for class objects {}.'
+                                  .format(self.__class__))
 
     def __rmul__(self, scalar):
         return _ScaledPreconditioner(self, scalar)
@@ -72,22 +79,23 @@ class Preconditioner(LinearOperator):
 
 
 class _ScaledPreconditioner(Preconditioner):
-    def __init__(self, preconditioner: Preconditioner, scalar: object):
+    def __init__(self, preconditioner: Preconditioner, scalar: numpy.ScalarType):
         """
         Abstract representation of scaled preconditioners, that is, the scalar (or external) multiplication of linear
         operators.
 
-        :param preconditioner: Preconditioner as a linear operator involved in the external multiplication.
+        :param preconditioner: Preconditioner involved in the external multiplication.
         :param scalar: Scalar involved in the external multiplication.
         """
-        # Sanitize the preconditioner attribute
+        # Sanitize the preconditioner argument
         if not isinstance(preconditioner, Preconditioner):
             raise PreconditionerError('External product should involve instances of Preconditioner.')
 
-        # Sanitize the scalar attribute
+        # Sanitize the scalar argument
         if not numpy.isscalar(scalar):
             raise PreconditionerError('External product should involve a scalar.')
 
+        # Initialize operands attribute
         self.operands = (scalar, preconditioner)
 
         super().__init__(preconditioner.linear_op)
@@ -102,6 +110,9 @@ class _ScaledPreconditioner(Preconditioner):
         n, _ = self.operands[1].shape
         return self.operands[1].matvec_cost + n
 
+    def _construction_cost(self):
+        return self.operands[1].construction_cost
+
 
 class _SummedPreconditioner(Preconditioner):
     def __init__(self, precond1: Preconditioner, precond2: Preconditioner):
@@ -111,7 +122,7 @@ class _SummedPreconditioner(Preconditioner):
         :param precond1: First preconditioner involved in the summation.
         :param precond2: Second preconditioner involved in the summation.
         """
-        # Sanitize the precond1 and precond2 attributes
+        # Sanitize the preconditioners arguments
         if not isinstance(precond1, Preconditioner) or not isinstance(precond2, Preconditioner):
             raise PreconditionerError('Both operands in summation must be instances of Preconditioner.')
 
@@ -132,6 +143,9 @@ class _SummedPreconditioner(Preconditioner):
     def _matvec_cost(self):
         n, _ = self.operands[0].shape
         return self.operands[0].matvec_cost + self.operands[1].matvec_cost + n
+
+    def _construction_cost(self):
+        return self.operands[0].construction_cost + self.operands[1].construction_cost
 
 
 class _ComposedPreconditioner(Preconditioner):
@@ -159,17 +173,22 @@ class _ComposedPreconditioner(Preconditioner):
         z = x - self.linear_op.dot(y)
         return y + self.operands[1].dot(z)
 
-    def _rmatvec(self, x):
-        raise NotImplemented('Method _rmatvec not implemented.')
-
     def _matvec_cost(self):
-        cost = self.operands[0].matvec_cost + self.operands[1].matvec_cost + self.linear_op.matvec_cost
-        cost = cost + 2 * self.shape[0]
+        n, _ = self.shape
+        cost = self.operands[0].matvec_cost + self.operands[1].matvec_cost + self.linear_op.matvec_cost + 2 * n
         return cost
+
+    def _construction_cost(self):
+        return self.operands[0].construction_cost + self.operands[1].construction_cost
 
 
 class IdentityPreconditioner(Preconditioner):
     def __init__(self, linear_op: LinearOperator):
+        """
+        Abstract representation of the identity preconditioner.
+
+        :param linear_op: Linear operator to precondition.
+        """
         super().__init__(linear_op)
 
     def _matvec(self, x):
@@ -187,34 +206,35 @@ class IdentityPreconditioner(Preconditioner):
 
 class Jacobi(Preconditioner):
 
-    def __init__(self, matrix_op: MatrixOperator):
+    def __init__(self, linear_op: LinearOperator):
         """
-        Abstract representation of Jacobi preconditioner. This preconditioner is the inverse of the matrix diagonal.
+        Abstract representation of Jacobi preconditioner, that is the inverse of the matrix diagonal.
 
-        :param matrix_op: Matrix to which the Jacobi preconditioner is built on.
+        :param linear_op: Linear operator to build the Jacobi preconditioner on.
         """
         # Sanitize matrix operator argument
-        if not isinstance(matrix_op, MatrixOperator):
-            raise PreconditionerError('Matrix operator must be an instance of MatrixOperator.')
+        if not isinstance(linear_op, MatrixOperator):
+            raise PreconditionerError('Jacobi preconditioner requires an instance of LinearOperator.')
 
         # Retrieve diagonal elements of the matrix operator
-        if matrix_op.is_sparse:
-            diagonal = matrix_op.matrix.diagonal()
+        matrix_repr = linear_op.mat
+        if scipy.sparse.isspmatrix(matrix_repr):
+            diagonal = matrix_repr.diagonal()
         else:
-            diagonal = numpy.diag(matrix_op.matrix)
+            diagonal = numpy.diag(matrix_repr)
 
         # Handle potential zeros in the diagonal elements
-        diagonal[diagonal == 0] += 1
+        diagonal[diagonal == 0] += 1.
 
-        self._diagonal = scipy.sparse.diags(1 / diagonal)
+        self._diagonal = scipy.sparse.diags(1. / diagonal)
 
-        super().__init__(matrix_op)
+        super().__init__(linear_op)
 
     def _matvec(self, x):
         return self._diagonal.dot(x)
 
     def _rmatvec(self, x):
-        return self._matvec(x)
+        return self._diagonal.dot(x)
 
     def _matvec_cost(self):
         return self._diagonal.size
@@ -224,30 +244,30 @@ class Jacobi(Preconditioner):
 
 
 class BlockJacobi(Preconditioner):
-    def __init__(self, matrix_op: MatrixOperator, block_size: int):
+    def __init__(self, linear_op: LinearOperator, block_size: int):
         """
         Abstract representation for the block Jacobi preconditioner.
 
-        :param matrix_op: Matrix to which the symmetric Gauss-Seidel preconditioner is built on.
+        :param linear_op: Linear operator to build the block Jacobi preconditioner on.
         :param block_size: Desired size for the blocks.
         """
         # Sanitize matrix operator argument
-        if not isinstance(matrix_op, MatrixOperator):
-            raise PreconditionerError('Matrix operator must be an instance of MatrixOperator.')
+        if not isinstance(linear_op, LinearOperator):
+            raise PreconditionerError('Block Jacobi preconditioner requires an instance of LinearOperator.')
 
-        self.matrix = matrix_op.matrix
+        self.matrix = linear_op.mat
 
         # Sanitize block size argument
         if not isinstance(block_size, int) or block_size < 1:
             raise PreconditionerError('Block size must be a positive integer, received {}.'.format(block_size))
 
-        if matrix_op.shape[0] % block_size != 0:
+        if linear_op.shape[0] % block_size != 0:
             raise PreconditionerError('Block size inconsistent with operator shape. {} not divisible by {}.'
-                                      .format(matrix_op.shape[0], block_size))
+                                      .format(linear_op.shape[0], block_size))
 
         self.block_size = block_size
 
-        super().__init__(matrix_op)
+        super().__init__(linear_op)
 
     def _matvec(self, x):
         y = numpy.zeros_like(x)
@@ -255,11 +275,16 @@ class BlockJacobi(Preconditioner):
         return y
 
     def _matvec_cost(self):
-        return self.linear_op.matvec_cost
+        raise NotImplementedError('Matrix-vector product computational cost for class {} not yet implemented.'
+                                  .format(self.__class__.__name__))
+
+    def _construction_cost(self):
+        raise NotImplementedError('Construction cost for class {} not yet implemented.'
+                                  .format(self.__class__.__name__))
 
 
 class SymmetricGaussSeidel(Preconditioner):
-    def __init__(self, matrix_op: MatrixOperator):
+    def __init__(self, linear_op: LinearOperator):
         """
         Abstract representation for the symmetric Gauss-Seidel preconditioner. Formally, if the matrix operator A is
         split such that A = L + D + L.T with D the diagonal and L the strict lower triangular part of A, then the
@@ -267,15 +292,15 @@ class SymmetricGaussSeidel(Preconditioner):
 
             M = (D + L) * D^(-1) * (D + L^T)
 
-        :param matrix_op: Matrix to which the symmetric Gauss-Seidel preconditioner is built on.
+        :param linear_op: Linear operator to build the symmetric Gauss-Seidel preconditioner on.
         """
         # Sanitize matrix operator argument
-        if not isinstance(matrix_op, MatrixOperator):
-            raise PreconditionerError('Matrix operator must be an instance of MatrixOperator.')
+        if not isinstance(linear_op, LinearOperator):
+            raise PreconditionerError('Symmetric Gauss-Seidel preconditioner requires an instance of LinearOperator.')
 
-        self.matrix = matrix_op.matrix
+        self.matrix = linear_op.mat
 
-        super().__init__(matrix_op)
+        super().__init__(linear_op)
 
     def _matvec(self, x):
         y = numpy.zeros_like(x)
@@ -283,34 +308,40 @@ class SymmetricGaussSeidel(Preconditioner):
         return y
 
     def _matvec_cost(self):
-        return self.linear_op.matvec_cost
+        raise NotImplementedError('Matrix-vector product computational cost for class {} not yet implemented.'
+                                  .format(self.__class__.__name__))
+
+    def _construction_cost(self):
+        raise NotImplementedError('Construction cost for class {} not yet implemented.'
+                                  .format(self.__class__.__name__))
 
 
 class BlockSymmetricGaussSeidel(Preconditioner):
-    def __init__(self, matrix_op: MatrixOperator, block_size: int):
+    def __init__(self, linear_op: LinearOperator, block_size: int):
         """
         Abstract representation for the block symmetric Gauss-Seidel preconditioner.
 
-        :param matrix_op: Matrix to which the symmetric Gauss-Seidel preconditioner is built on.
+        :param linear_op: Linear operator to build the block symmetric Gauss-Seidel preconditioner on.
         :param block_size: Desired size for the blocks.
         """
         # Sanitize matrix operator argument
-        if not isinstance(matrix_op, MatrixOperator):
-            raise PreconditionerError('Matrix operator must be an instance of MatrixOperator.')
+        if not isinstance(linear_op, LinearOperator):
+            raise PreconditionerError('Block symmetric Gauss-Seidel preconditioner requires an instance of '
+                                      'LinearOperator.')
 
-        self.matrix = matrix_op.matrix
+        self.matrix = linear_op.mat
 
         # Sanitize block size argument
         if not isinstance(block_size, int) or block_size < 1:
             raise PreconditionerError('Block size must be a positive integer, received {}.'.format(block_size))
 
-        if matrix_op.shape[0] % block_size != 0:
+        if linear_op.shape[0] % block_size != 0:
             raise PreconditionerError('Block size inconsistent with operator shape. {} not divisible by {}.'
-                                      .format(matrix_op.shape[0], block_size))
+                                      .format(linear_op.shape[0], block_size))
 
         self.block_size = block_size
 
-        super().__init__(matrix_op)
+        super().__init__(linear_op)
 
     def _matvec(self, x):
         y = numpy.zeros_like(x)
@@ -318,35 +349,42 @@ class BlockSymmetricGaussSeidel(Preconditioner):
         return y
 
     def _matvec_cost(self):
-        return self.linear_op.matvec_cost
+        raise NotImplementedError('Matrix-vector product computational cost for class {} not yet implemented.'
+                                  .format(self.__class__.__name__))
+
+    def _construction_cost(self):
+        raise NotImplementedError('Construction cost for class {} not yet implemented.'
+                                  .format(self.__class__.__name__))
 
 
 class AlgebraicMultiGrid(Preconditioner):
-    def __init__(self, matrix_op: MatrixOperator,
+    def __init__(self, linear_op: LinearOperator,
                  heuristic: str = 'ruge_stuben',
                  n_cycles: int = 1,
                  **kwargs):
         """
-        Abstract representation for Algebraic Multi-grid (AMG) preconditioners. Several heuristics are available from
-        the PyAMG python library.
+        Abstract representation for Algebraic Multi-grid (AMG) class of preconditioners. Available heuristics are the
+        one from the PyAMG Python library.
 
-        :param matrix_op: Matrix to which the algebraic multi-grid preconditioner is built on.
-        :param heuristic: Name of the algebraic multi-grid heuristic used to construct the hierarchy.
+        :param linear_op: Linear operator to build the algebraic multi-grid preconditioner on.
+        :param heuristic: Name of the algebraic multi-grid heuristic used for multi-level hierarchy construction.
         :param n_cycles: Number of cycles done per application of the multi-grid method as a preconditioner.
         """
-        # Sanitize heuristic argument
+        # Sanitize the heuristic argument
         if heuristic not in ['ruge_stuben', 'smoothed_aggregated', 'rootnode']:
             raise PreconditionerError('AMG heuristic {} unknown.'.format(heuristic))
 
+        matrix_repr = linear_op.mat
+
         # Setup multi-grid hierarchical structure with corresponding heuristic
         if heuristic == 'ruge_stuben':
-            self.amg = pyamg.ruge_stuben_solver(matrix_op.matrix.tocsr(), **kwargs)
+            self.amg = pyamg.ruge_stuben_solver(matrix_repr.tocsr(), **kwargs)
 
         elif heuristic == 'smoothed_aggregated':
-            self.amg = pyamg.smoothed_aggregation_solver(matrix_op.matrix.tocsr(), **kwargs)
+            self.amg = pyamg.smoothed_aggregation_solver(matrix_repr.tocsr(), **kwargs)
 
         elif heuristic == 'rootnode':
-            self.amg = pyamg.rootnode_solver(matrix_op.matrix.tocsr(), **kwargs)
+            self.amg = pyamg.rootnode_solver(matrix_repr.tocsr(), **kwargs)
 
         # Sanitize the number of cycles argument
         if not isinstance(n_cycles, int) or n_cycles < 1:
@@ -354,19 +392,23 @@ class AlgebraicMultiGrid(Preconditioner):
 
         self.n_cycles = n_cycles
 
-        super().__init__(matrix_op)
+        super().__init__(linear_op)
 
     def _matvec(self, x):
-        y = self.amg.solve(x, tol=1e-15, maxiter=self.n_cycles, cycle='F', accel=None)
-
+        y = self.amg.solve(x, tol=1e-15, maxiter=self.n_cycles, cycle='W', accel=None)
         return numpy.atleast_2d(y).T
 
     def _matvec_cost(self):
-        return self.shape[0]
+        raise NotImplementedError('Matrix-vector product computational cost for class {} not yet implemented.'
+                                  .format(self.__class__.__name__))
+
+    def _construction_cost(self):
+        raise NotImplementedError('Construction cost for class {} not yet implemented.'
+                                  .format(self.__class__.__name__))
 
 
 class CoarseGridCorrection(Preconditioner):
-    def __init__(self, linear_op: LinearOperator, subspace: SubspaceType, rank_tol: float = 1e-10):
+    def __init__(self, linear_op: LinearOperator, subspace: SubspaceType):
         """
         Abstract representation for Coarse-Grid Correction preconditioner. Formally, for a given subspace S, and linear
         operator A, the coarse-grid correction has the following closed form:
@@ -375,22 +417,22 @@ class CoarseGridCorrection(Preconditioner):
 
         :param linear_op: Linear operator to coarsen.
         :param subspace: Subspace on which the linear operator is restricted and interpolated.
-        :param rank_tol: Numerical rank tolerance to state a rank deficiency of the subspace.
         """
         # Sanitize the subspace attribute
         if not isinstance(subspace, (LinearSubspace, numpy.ndarray, scipy.sparse.spmatrix)):
             raise PreconditionerError('Subspace should either be numpy.ndarray or scipy.sparse.spmatrix.')
 
-        if not isinstance(subspace, LinearSubspace):
-            subspace = Subspace(subspace)
-
-        self._subspace = subspace
+        self._S = Subspace(subspace) if not isinstance(subspace, LinearSubspace) else subspace
 
         # Compute the Galerkin operator S^T @ A @ S
-        self._reduced_linear_op = self._subspace.T @ linear_op @ self._subspace
+        self._A = (self._S.T @ linear_op @ self._S).mat
+        try:
+            self._A = self._A.todense()
+        except AttributeError:
+            pass
 
         # Cholesky decomposition of the reduced operator
-        self._cho_factor = scipy.linalg.cho_factor(self._reduced_linear_op.mat,
+        self._cho_factor = scipy.linalg.cho_factor(self._A,
                                                    lower=True,
                                                    overwrite_a=False)
 
@@ -399,17 +441,17 @@ class CoarseGridCorrection(Preconditioner):
         self.construction_cost = self._construction_cost()
 
     def _matvec(self, x):
-        y = self._subspace.T.dot(x)
+        y = self._S.T.dot(x)
         scipy.linalg.cho_solve(self._cho_factor, y, overwrite_b=True)
-        y = self._subspace.dot(y)
+        y = self._S.dot(y)
         return y
 
     def _matvec_cost(self):
-        _, k = self._subspace.shape
-        return 2 * self._subspace.matvec_cost + 2 * k**2
+        _, k = self._S.shape
+        return 2 * self._S.matvec_cost + 2 * k**2
 
     def _construction_cost(self):
-        n, k = self._subspace.shape
+        n, k = self._S.shape
         cost = 2 * n * k**2 + 2 * k**3
         cost += 2 * k * self.linear_op.matvec_cost + 2 * n * k**2
         cost += 2 / 3 * k**3
@@ -448,6 +490,9 @@ class LimitedMemoryPreconditioner(Preconditioner):
 
     def _matvec_cost(self):
         return self.lmp.matvec_cost
+
+    def _construction_cost(self):
+        return self.lmp.construction_cost
 
 
 class PreconditionerGenerator(object):
