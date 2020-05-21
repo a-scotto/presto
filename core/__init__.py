@@ -9,4 +9,4 @@ Created on May 15, 2020 at 16:07.
 Description:
 """
 
-__all__ = ['linop', 'linsys', 'preconditioner', 'subspace']
+__all__ = ['algebra', 'linsolve', 'preconditioner', 'subspace']
