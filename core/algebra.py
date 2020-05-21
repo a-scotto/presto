@@ -56,7 +56,10 @@ class LinearOperator(scipyLinearOperator):
 
         self.shape = shape
 
-        self.matvec_cost = self._matvec_cost()
+        try:
+            self.matvec_cost = self._matvec_cost()
+        except NotImplementedError:
+            self.matvec_cost = numpy.Inf
 
     def _matvec(self, x: numpy.ndarray) -> numpy.ndarray:
         """
