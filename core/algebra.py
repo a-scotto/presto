@@ -519,17 +519,6 @@ class MatrixOperator(LinearOperator):
         x = numpy.asanyarray(x)
         return self.matrix.H.dot(x)
 
-    def dot(self, x) -> MatrixType:
-        """
-        Override scipy.linalg.linearOperator dot method to handle cases of a sparse input.
-
-        :param x: Input vector, maybe represented in sparse format, to compute the dot product with.
-        """
-        if scipy.sparse.isspmatrix(x):
-            return self.matrix.dot(x)
-        else:
-            return super().dot(x)
-
     def _matvec_cost(self):
         return 2 * self.matrix.size
 
@@ -564,17 +553,6 @@ class Subspace(LinearSubspace):
     def _rmatvec(self, x):
         x = numpy.asanyarray(x)
         return self.subspace.T.dot(x)
-
-    def dot(self, x) -> MatrixType:
-        """
-        Override scipy.linalg.linearOperator dot method to handle cases of a sparse input.
-
-        :param x: Input vector, maybe represented in sparse format, to compute the dot product with.
-        """
-        if scipy.sparse.isspmatrix(x):
-            return self.subspace.dot(x)
-        else:
-            return super().dot(x)
 
     def _matvec_cost(self):
         return 2 * self.subspace.size
