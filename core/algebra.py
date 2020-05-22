@@ -28,7 +28,7 @@ class LinearOperatorError(Exception):
     """
 
 
-class SubspaceError(Exception):
+class LinearSubspaceError(Exception):
     """
     Exception raised when KrylovSubspace object encounters specific errors.
     """
@@ -97,7 +97,7 @@ class LinearOperator(scipyLinearOperator):
 
     def __mul__(self, other):
         if isinstance(other, LinearSubspace):
-            return _ImageSubspace(self, other)
+            return _ImageLinearSubspace(self, other)
         else:
             return _ComposedLinearOperator(self, other)
 
@@ -291,20 +291,20 @@ class LinearSubspace(LinearOperator):
         raise NotImplementedError('Method _mat not implemented for class objects {}.'.format(self.__class__))
 
     def __add__(self, subspace):
-        return _SummedSubspace(self, subspace)
+        return _SummedLinearSubspace(self, subspace)
 
     def __mul__(self, other):
         if (isinstance(other, LinearOperator) and not isinstance(other, LinearSubspace))\
-                and isinstance(self, _AdjointSubspace):
-            return _ImageSubspace(other, self.T).T
+                and isinstance(self, _AdjointLinearSubspace):
+            return _ImageLinearSubspace(other, self.T).T
         else:
-            return _ComposedLinearOperator(self, other)
+            return _ComposedLinearSubspace(self, other)
 
     def _adjoint(self):
-        return _AdjointSubspace(self)
+        return _AdjointLinearSubspace(self)
 
 
-class _SummedSubspace(LinearSubspace):
+class _SummedLinearSubspace(LinearSubspace):
     def __init__(self, subspace1: LinearSubspace, subspace2: LinearSubspace):
         """
         Abstract representation of the addition of two linear subspaces, that is, of the sum F + G of linear subspace.
@@ -314,12 +314,12 @@ class _SummedSubspace(LinearSubspace):
         """
         # Sanitize the subspaces arguments
         if not isinstance(subspace1, LinearSubspace) or not isinstance(subspace2, LinearSubspace):
-            raise SubspaceError('Both operands in summation must be instances of LinearSubspace.')
+            raise LinearSubspaceError('Both operands in summation must be instances of LinearSubspace.')
 
         # Check the consistency of subspaces shapes
         if subspace1.shape[0] != subspace2.shape[0]:
-            raise SubspaceError('Operands in summation have inconsistent shapes: {} and {}.'
-                                .format(subspace1.shape, subspace2.shape))
+            raise LinearSubspaceError('Operands in summation have inconsistent shapes: {} and {}.'
+                                      .format(subspace1.shape, subspace2.shape))
 
         if subspace1.shape[1] + subspace2.shape[1] > subspace1.shape[0]:
             warnings.warn('Dimensions of the 2 subspaces exceed vector space dimension, hence no longer full rank.')
@@ -358,7 +358,46 @@ class _SummedSubspace(LinearSubspace):
             return numpy.hstack([self.operands[0].mat, self.operands[1].mat])
 
 
-class _ImageSubspace(LinearSubspace):
+class _ComposedLinearSubspace(LinearSubspace):
+    def __init__(self, subspace1: LinearSubspace, subspace2: LinearSubspace):
+        """
+        Abstract representation of the composition of two linear subspaces.
+
+        :param subspace1: First linear subspace involved in the composition.
+        :param subspace2: Second linear subspace involved in the composition.
+        """
+        # Sanitize the linear operators arguments
+        if not isinstance(subspace1, LinearOperator) or not isinstance(subspace2, LinearOperator):
+            raise LinearSubspaceError('Both operands in composition must be instances of LinearSubspace.')
+
+        # Check the consistency of linear operators shapes
+        if subspace1.shape[1] != subspace2.shape[0]:
+            raise LinearSubspaceError('Operands in composition have inconsistent shapes: {} and {}.'
+                                      .format(subspace1.shape, subspace2.shape))
+
+        # Initialize operands attribute
+        self.operands = (subspace1, subspace2)
+
+        # Resulting shape (n, p) @ (p, m) -> (n, m)
+        shape = (subspace1.shape[0], subspace2.shape[1])
+        dtype = numpy.find_common_type([subspace1.dtype, subspace2.dtype], [])
+
+        super().__init__(dtype, shape)
+
+    def _matvec(self, x):
+        return self.operands[0].dot(self.operands[1].dot(x))
+
+    def _rmatvec(self, x):
+        return self.operands[1].T.dot(self.operands[0].T.dot(x))
+
+    def _matvec_cost(self):
+        return self.operands[0].matvec_cost + self.operands[1].matvec_cost
+
+    def _mat(self):
+        return self.operands[0].mat @ self.operands[1].mat
+
+
+class _ImageLinearSubspace(LinearSubspace):
     def __init__(self, linear_op: LinearOperator, subspace: LinearSubspace):
         """
         Abstract representation of the image of a subspace under the action of a linear operator.
@@ -368,12 +407,12 @@ class _ImageSubspace(LinearSubspace):
         """
         # Sanitize the linear operator and subspace arguments
         if not isinstance(linear_op, LinearOperator) or not isinstance(subspace, LinearSubspace):
-            raise SubspaceError('Image of a subspace requires instances of LinearOperator and LinearSubspace.')
+            raise LinearSubspaceError('Image of a subspace requires instances of LinearOperator and LinearSubspace.')
 
         # Check the consistency of operands shapes
         if linear_op.shape[1] != subspace.shape[0]:
-            raise SubspaceError('Operands for the image have inconsistent shapes: {} and {}.'
-                                .format(linear_op.shape, subspace.shape))
+            raise LinearSubspaceError('Operands for the image have inconsistent shapes: {} and {}.'
+                                      .format(linear_op.shape, subspace.shape))
 
         # Initialize operands attribute
         self.operands = (linear_op, subspace)
@@ -397,7 +436,7 @@ class _ImageSubspace(LinearSubspace):
         return self.operands[0].mat @ self.operands[1].mat
 
 
-class _AdjointSubspace(LinearSubspace):
+class _AdjointLinearSubspace(LinearSubspace):
     def __init__(self, subspace: LinearSubspace):
         """
         Abstract representation of the adjoint of a linear subspace.
@@ -510,8 +549,8 @@ class Subspace(LinearSubspace):
         """
         # Sanitize the matrix argument and check for potential sparse representation
         if not isinstance(subspace, (numpy.ndarray, scipy.sparse.spmatrix)):
-            raise SubspaceError('Matrix representation requires a matrix-like format but received {}'
-                                .format(type(subspace)))
+            raise LinearSubspaceError('Matrix representation requires a matrix-like format but received {}'
+                                      .format(type(subspace)))
 
         self.is_sparse = scipy.sparse.issparse(subspace)
         self.subspace = subspace
@@ -577,8 +616,8 @@ class OrthogonalProjector(LinearOperator):
             self.L_factor = None
             self.AV = None
         else:
-            self.AV = self.ip_B.dot(self.V.mat)
-            M = self.V.mat.T.dot(self.AV)
+            self.AV = self.ip_B @ self.V
+            M = (self.V.T @ self.AV).mat
             try:
                 M = M.todense()
             except AttributeError:
@@ -615,4 +654,4 @@ class OrthogonalProjector(LinearOperator):
         if self.factorized:
             return 2 * (self.VQ.size + self.AVQ.size)
         else:
-            return self.V.T.matvec_cost + 2 * (self.L_factor[0].size + self.AV.size)
+            return self.V.T.matvec_cost + 2 * (self.L_factor[0].size + self.AV.matvec_cost)
