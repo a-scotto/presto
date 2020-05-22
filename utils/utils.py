@@ -18,13 +18,66 @@ import warnings
 import scipy.optimize
 
 from typing import List, Tuple
-from core.linop import LinearOperator
+from core.algebra import LinearOperator
 
 
 class UtilsError(Exception):
     """
     Exception raised when utils method encounters specific errors.
     """
+
+
+class Timer:
+    """
+    Timer class allowing to time block of code in a context manager. The opening of the context manager takes a label as
+    argument so as to gather different timings in a single object.
+    """
+    def __init__(self):
+        self.timings = dict()
+        self._start_time = None
+        self._current = None
+
+    def start(self):
+        """
+        Begin to time.
+        """
+        self._start_time = time.perf_counter()
+
+    def stop(self):
+        """
+        End to time.
+        """
+        elapsed_time = time.perf_counter() - self._start_time
+
+        if self._current in self.timings.keys():
+            self.timings[self._current] += elapsed_time
+        else:
+            self.timings[self._current] = elapsed_time
+
+        self._start_time = None
+        self._current = None
+
+        return elapsed_time
+
+    def time(self, name):
+        """
+        Store the labeling of the context manager when opened.
+        """
+        self._current = name
+        return self
+
+    def __enter__(self):
+        """
+        Start a new timer as a context manager.
+        """
+        self.start()
+        return self
+
+    def __exit__(self, *exc_info):
+        """
+        Stop the context manager timer.
+        """
+        self.stop()
 
 
 def compute_subspace_dim(max_budget: float,
