@@ -17,7 +17,8 @@ from typing import Union
 from utils.linalg import qr
 from scipy.sparse.linalg import LinearOperator as scipyLinearOperator
 
-__all__ = ['LinearOperator', 'IdentityOperator', 'LinearSubspace', 'Subspace', 'MatrixOperator', 'OrthogonalProjector']
+__all__ = ['LinearOperator', 'IdentityOperator', 'LinearSubspace', 'Subspace', 'MatrixOperator', 'OrthogonalProjector',
+           'Preconditioner', 'PreconditionerError']
 
 MatrixType = Union[numpy.ndarray, scipy.sparse.spmatrix]
 
@@ -31,6 +32,12 @@ class LinearOperatorError(Exception):
 class LinearSubspaceError(Exception):
     """
     Exception raised when KrylovSubspace object encounters specific errors.
+    """
+
+
+class PreconditionerError(Exception):
+    """
+    Exception raised when Preconditioner object encounters specific errors.
     """
 
 
@@ -463,6 +470,160 @@ class _AdjointLinearSubspace(LinearSubspace):
 
     def _mat(self):
         return self._subspace.mat.T.conj()
+
+
+class Preconditioner(LinearOperator):
+    def __init__(self, linear_op: LinearOperator):
+        """
+        Abstract representation of preconditioners. Preconditioners are linear operators dedicated to improve the
+        convergence of iterative methods for the solution of linear systems. For a given linear system involving a
+        linear operator A and a right-hand side b, the preconditioned linear system is written as MAx = Mb, where M is
+        a preconditioner. The preconditioner is therefore closely related to the linear operator A, hence the following
+        constructor for this abstract class.
+
+        :param linear_op: Linear operator to which the preconditioner is related.
+        """
+        # Sanitize the linear operator argument
+        if not isinstance(linear_op, LinearOperator):
+            raise PreconditionerError('Linear operator must be an instance of LinearOperator.')
+
+        self.linear_op = linear_op
+
+        super().__init__(linear_op.dtype, linear_op.shape)
+
+        try:
+            self.construction_cost = self._construction_cost()
+        except NotImplementedError:
+            self.construction_cost = numpy.Inf
+
+    def _construction_cost(self):
+        """
+        Method to get the computational cost of the construction of the preconditioner.
+        """
+        raise NotImplementedError('Method _construction_cost not implemented for class objects {}.'
+                                  .format(self.__class__))
+
+    def __rmul__(self, scalar):
+        return _ScaledPreconditioner(self, scalar)
+
+    def __add__(self, preconditioner):
+        return _SummedPreconditioner(self, preconditioner)
+
+    def __mul__(self, other):
+        if isinstance(other, Preconditioner):
+            return _ComposedPreconditioner(self, other)
+        else:
+            return _ComposedLinearOperator(self, other)
+
+    def __neg__(self):
+        return _ScaledPreconditioner(self, -1)
+
+    def __sub__(self, preconditioner):
+        return self + (-preconditioner)
+
+
+class _ScaledPreconditioner(Preconditioner):
+    def __init__(self, preconditioner: Preconditioner, scalar: numpy.ScalarType):
+        """
+        Abstract representation of scaled preconditioners, that is, the scalar (or external) multiplication of linear
+        operators.
+
+        :param preconditioner: Preconditioner involved in the external multiplication.
+        :param scalar: Scalar involved in the external multiplication.
+        """
+        # Sanitize the preconditioner argument
+        if not isinstance(preconditioner, Preconditioner):
+            raise PreconditionerError('External product should involve instances of Preconditioner.')
+
+        # Sanitize the scalar argument
+        if not numpy.isscalar(scalar):
+            raise PreconditionerError('External product should involve a scalar.')
+
+        # Initialize operands attribute
+        self.operands = (scalar, preconditioner)
+
+        super().__init__(preconditioner.linear_op)
+
+    def _matvec(self, x):
+        return self.operands[0] * self.operands[1].dot(x)
+
+    def _rmatvec(self, x):
+        return numpy.conj(self.operands[0]) * self.operands[1].H.dot(x)
+
+    def _matvec_cost(self):
+        n, _ = self.operands[1].shape
+        return self.operands[1].matvec_cost + n
+
+    def _construction_cost(self):
+        return self.operands[1].construction_cost
+
+
+class _SummedPreconditioner(Preconditioner):
+    def __init__(self, precond1: Preconditioner, precond2: Preconditioner):
+        """
+        Abstract representation of the sum of two preconditioners, that is, the summation of linear operators.
+
+        :param precond1: First preconditioner involved in the summation.
+        :param precond2: Second preconditioner involved in the summation.
+        """
+        # Sanitize the preconditioners arguments
+        if not isinstance(precond1, Preconditioner) or not isinstance(precond2, Preconditioner):
+            raise PreconditionerError('Both operands in summation must be instances of Preconditioner.')
+
+        # Check linear operator consistency
+        if not (precond1.linear_op is precond2.linear_op):
+            raise PreconditionerError('Both operands must be preconditioners of the same linear operator.')
+
+        self.operands = (precond1, precond2)
+
+        super().__init__(precond1.linear_op)
+
+    def _matvec(self, x):
+        return self.operands[0].dot(x) + self.operands[1].dot(x)
+
+    def _rmatvec(self, x):
+        return self.operands[0].H.dot(x) + self.operands[1].H.dot(x)
+
+    def _matvec_cost(self):
+        n, _ = self.operands[0].shape
+        return self.operands[0].matvec_cost + self.operands[1].matvec_cost + n
+
+    def _construction_cost(self):
+        return self.operands[0].construction_cost + self.operands[1].construction_cost
+
+
+class _ComposedPreconditioner(Preconditioner):
+    def __init__(self, precond1: Preconditioner, precond2: Preconditioner):
+        """
+        Abstract representation of the composition of two preconditioner, that is, the composition of linear operators.
+
+        :param precond1: First preconditioner involved in the composition.
+        :param precond2: Second preconditioner involved in the composition.
+        """
+        # Sanitize the precond1 and precond2 attribute
+        if not isinstance(precond1, Preconditioner) or not isinstance(precond2, Preconditioner):
+            raise PreconditionerError('Both operands in composition must be instances of Preconditioner.')
+
+        # Check linear operator consistency
+        if not (precond1.linear_op is precond2.linear_op):
+            raise PreconditionerError('Both operands must be preconditioners of the same linear operator.')
+
+        self.operands = (precond1, precond2)
+
+        super().__init__(precond1.linear_op)
+
+    def _matvec(self, x):
+        y = self.operands[0].dot(x)
+        z = x - self.linear_op.dot(y)
+        return y + self.operands[1].dot(z)
+
+    def _matvec_cost(self):
+        n, _ = self.shape
+        cost = self.operands[0].matvec_cost + self.operands[1].matvec_cost + self.linear_op.matvec_cost + 2 * n
+        return cost
+
+    def _construction_cost(self):
+        return self.operands[0].construction_cost + self.operands[1].construction_cost
 
 
 class IdentityOperator(LinearOperator):
