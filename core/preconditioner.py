@@ -15,12 +15,12 @@ import scipy.linalg
 import scipy.sparse.linalg
 import pyamg.relaxation.relaxation
 
-from typing import Union
 from core.algebra import *
+from typing import Union, List
 
 __all__ = ['IdentityPreconditioner', 'Jacobi', 'BlockJacobi', 'SymmetricGaussSeidel', 'BlockSymmetricGaussSeidel',
            'AlgebraicMultiGrid', 'CoarseGridCorrection', 'LimitedMemoryPreconditioner', 'PreconditionerGenerator',
-           'Preconditioner']
+           'Preconditioner', 'MultiPreconditioner']
 
 SubspaceType = Union[LinearSubspace, numpy.ndarray, scipy.sparse.spmatrix]
 
@@ -336,6 +336,45 @@ class LimitedMemoryPreconditioner(Preconditioner):
 
     def _construction_cost(self):
         return self.lmp.construction_cost
+
+
+class MultiPreconditioner(Preconditioner):
+    def __init__(self, preconditioners: List[Preconditioner], theta: float = 1.):
+        """
+        Abstract representation of Multi-Preconditioner, that is bases on several preconditioners wich output is based
+        on the contributions of each preconditioner.
+
+        :param preconditioners: Preconditioners to use for the computation.
+        """
+        # Sanitize the subspace attribute
+        if not isinstance(preconditioners, list):
+            raise PreconditionerError('Multi-preconditioner requires a list of preconditioner.')
+
+        if not numpy.all([isinstance(M_i, Preconditioner) for M_i in preconditioners]):
+            raise PreconditionerError('Multi-preconditioner requires a list of preconditioner.')
+
+        linear_op = preconditioners[0].linear_op
+
+        if not numpy.all([M_i.linear_op is linear_op for M_i in preconditioners]):
+            raise PreconditionerError('Preconditioners in multi-preconditioner must be related to the same instance of'
+                                      'LinearOperator.')
+
+        self.preconditioners = preconditioners
+
+        super().__init__(linear_op)
+
+    def _matvec(self, x):
+        y = numpy.zeros_like(x)
+        for M_i in self.preconditioners:
+            y += M_i.dot(x)
+
+        return y
+
+    def _matvec_cost(self):
+        return numpy.sum([M_i.matvec_cost for M_i in self.preconditioners])
+
+    def _construction_cost(self):
+        return numpy.sum([M_i.construction_cost for M_i in self.preconditioners])
 
 
 class PreconditionerGenerator(object):
