@@ -32,14 +32,24 @@ parser = argparse.ArgumentParser()
 parser.add_argument('report',
                     nargs='*',
                     help='Paths of reports text files to post-process.')
-parser.add_argument('-s'
-                    '--spectrum',
-                    dest='spectrum',
-                    default=False,
+parser.add_argument('-t'
+                    '--time',
+                    dest='time',
+                    default=True,
                     action='store_true',
                     help='Whether to plot the approximate spectrum histogram.')
 
 args = parser.parse_args()
+
+reps = list()
+
+import os
+
+for rep in os.listdir('reports/'):
+    if "oilpan" in rep:
+        reps.append('reports/' + rep)
+
+args.report = reps
 
 # Sort the reports by operator and preconditioner tested
 merged_reports = merge_reports(args.report)
@@ -47,24 +57,16 @@ merged_reports = merge_reports(args.report)
 # Go through all the reports
 for operator in merged_reports.keys():
     for preconditioner in merged_reports[operator]:
-        if args.spectrum:
-            figure, (axes1, axes2) = pyplot.subplots(1, 2, figsize=(10, 6))
+        if args.time:
+            figure, (axes1, axes2) = pyplot.subplots(1, 2, figsize=(10, 5))
         else:
-            figure, axes1 = pyplot.subplots(1, 1)
+            figure, axes1 = pyplot.subplots(figsize=(5, 5))
             axes2 = None
-
-        approx_spectrum = None
 
         for i, REPORT_FILE in enumerate(merged_reports[operator][preconditioner]):
 
             with open(REPORT_FILE, 'r') as file:
                 report = json.load(file)
-
-            if axes2 is not None and approx_spectrum is None:
-                approx_spectrum = numpy.log10(report['approximate_spectrum'])
-                axes2.hist(approx_spectrum, bins=int(len(approx_spectrum)**0.5))
-                axes2.title.set_text(r'Approximate spectrum of $\mathsf{MA}$.')
-                axes2.set_xlabel(r'$\log_{10}(\sigma)$')
 
             figure.suptitle('LMP performances vs dimension of subspace, $M=${}'
                             .format(report['preconditioner']['name'].capitalize()),
@@ -73,9 +75,9 @@ for operator in merged_reports.keys():
             x_axis = list()
             error_bar = list() if report['subspace']['n_tests'] != 1 else None
             for sub_dim, data in report['data'].items():
-                x_axis.append(numpy.mean(data))
+                x_axis.append(numpy.mean(data['iterations']))
                 if error_bar is not None:
-                    error_bar.append(numpy.std(data))
+                    error_bar.append(numpy.std(data['iterations']))
 
             y_axis = numpy.asarray(report['computational_cost']) / report['MAX_BUDGET']
 
@@ -85,7 +87,21 @@ for operator in merged_reports.keys():
             except IndexError:
                 pass
 
-            axes1.errorbar(y_axis, x_axis,
+            axes1.errorbar(y_axis[:len(x_axis)], x_axis,
+                           c=COLORS[i % len(COLORS)], fmt='s-', mec='k', ms=3,
+                           yerr=error_bar, elinewidth=1, ecolor='k', capsize=3,
+                           label=label)
+
+            if axes2 is not None:
+                x_axis = list()
+                error_bar = list() if report['subspace']['n_tests'] != 1 else None
+                for sub_dim, data in report['data'].items():
+                    rate = numpy.asarray(data['time']) / numpy.asarray(data['iterations'])
+                    x_axis.append(numpy.mean(rate))
+                    if error_bar is not None:
+                        error_bar.append(numpy.std(rate))
+
+            axes2.errorbar(y_axis[:len(x_axis)], x_axis,
                            c=COLORS[i % len(COLORS)], fmt='s-', mec='k', ms=3,
                            yerr=error_bar, elinewidth=1, ecolor='k', capsize=3,
                            label=label)
