@@ -339,9 +339,9 @@ class LimitedMemoryPreconditioner(Preconditioner):
 
 
 class MultiPreconditioner(Preconditioner):
-    def __init__(self, preconditioners: List[Preconditioner], theta: float = 1.):
+    def __init__(self, preconditioners: List[Preconditioner]):
         """
-        Abstract representation of Multi-Preconditioner, that is bases on several preconditioners wich output is based
+        Abstract representation of Multi-Preconditioner, that is bases on several preconditioners which output is based
         on the contributions of each preconditioner.
 
         :param preconditioners: Preconditioners to use for the computation.
