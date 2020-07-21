@@ -13,15 +13,18 @@ import numpy
 import scipy.linalg
 import scipy.sparse
 
-from utils.linalg import norm
-from typing import Union, List
-from core.linop import LinearOperator, MatrixOperator, Projector, IdentityOperator
-from core.preconditioner import Preconditioner, IdentityPreconditioner, CoarseGridCorrection
+from typing import Union
+from utils.utils import *
+from utils.linalg import *
+from core.algebra import *
+from matplotlib import pyplot
+from core.preconditioner import *
 
-__all__ = ['LinearSystem', 'ConjugateGradient']
+__all__ = ['LinearSystem', 'ConjugateGradient', 'DeflatedConjugateGradient', 'BlockConjugateGradient',
+           'FlexibleConjugateGradient']
 
 Subspace = Union[numpy.ndarray, scipy.sparse.spmatrix]
-MultiPreconditioner = Union[Preconditioner, List[Preconditioner]]
+# MultiPreconditioner = Union[Preconditioner, List[Preconditioner]]
 
 
 class LinearSystemError(Exception):
@@ -179,16 +182,29 @@ class _IterativeSolver(object):
         self.maxiter = maxiter
 
         self.residue_norms = list()
+        self.timers = dict(A=Timer('Linear operator'),
+                           M=Timer('Preconditioner'),
+                           Ro=Timer('Re-orthogonalization'))
         self.N = 0
 
         self._solve()
         self._finalize()
 
-    def _solve(self):
+    def _solve(self) -> None:
+        """
+        Method to solve the linear system with the iterative method.
+        """
         raise NotImplemented('Iterative solver must implement a _solve method.')
 
-    def _finalize(self):
+    def _finalize(self) -> None:
+        """
+        Method to post-process results of the iterative method.
+        """
         raise NotImplemented('Iterative solver must implement a _finalize method.')
+
+    def plot_convergence(self):
+        label = self.__class__.__name__ + ' with ' + self.M.__class__.__name__
+        pyplot.gca().plot(self.residue_norms, label=label)
 
 
 class ConjugateGradient(_IterativeSolver):
@@ -226,14 +242,15 @@ class ConjugateGradient(_IterativeSolver):
                          maxiter=maxiter)
 
     def _solve(self) -> None:
-        """
-        Run the Conjugate Gradient algorithm.
-        """
         k = 0
 
-        # Initialize the algorithm with scaled residual r0, then z0 and p0
-        rk = self.linear_system.get_residual(self.x0)
-        zk = self.M.dot(rk)
+        # Initialize the algorithm
+        with self.timers['A']:
+            rk = self.linear_system.get_residual(self.x0)
+
+        with self.timers['M']:
+            zk = self.M.dot(rk)
+
         pk = numpy.copy(zk)
 
         rhos = list([float(zk.T @ rk)])
@@ -247,14 +264,16 @@ class ConjugateGradient(_IterativeSolver):
         self.tol = self.tol * (norm(self.linear_system.rhs, ip_B=self.M))
 
         while self.residue_norms[-1] > self.tol and k < self.maxiter:
-            qk = self.linear_system.linear_op.dot(pk)
+            with self.timers['A']:
+                qk = self.linear_system.linear_op.dot(pk)
             dk = pk.T @ qk
             alpha = rhos[-1] / dk
 
             self.yk += alpha * pk
 
             rk = rk - alpha * qk
-            zk = self.M.dot(rk)
+            with self.timers['M']:
+                zk = self.M.dot(rk)
 
             rhos.append(float(zk.T @ rk))
             self.residue_norms.append(rhos[-1]**0.5)
@@ -273,13 +292,7 @@ class ConjugateGradient(_IterativeSolver):
         self.N = k
 
     def _finalize(self) -> None:
-        """
-        Post-process the output of the CG, namely:
-         * build the final iterate xk
-         * build the Arnoldi matrix H and vectors V
-        """
-
-        # Get residuals and iterations cost and scale back the residuals
+        # Scale the residuals norms
         self.residue_norms = numpy.asarray(self.residue_norms) / self.residue_norms[0]
 
         # Compute the Arnoldi tridiagonal matrix coefficient if it was required
@@ -301,11 +314,121 @@ class ConjugateGradient(_IterativeSolver):
             self.H = self.H.todense()
             self.V = numpy.hstack(self.V)
 
+        for key, value in self.timers.items():
+            self.timers[key] = self.timers[key].total_elapsed
+
     def __repr__(self):
         """
         Provide a readable report of the Conjugate Gradient algorithm results.
         """
+        n_iterations = self.N
+        final_residual = self.residue_norms[-1]
+        residual_decrease = self.residue_norms[-1] / self.residue_norms[0]
 
+        _repr = 'Conjugate Gradient: {:4} iteration(s) |  '.format(n_iterations)
+        _repr += '||Axk - b||_M = {:1.4e} | '.format(final_residual)
+        _repr += '||Axk - b||_M / ||b||_M = {:1.4e}'.format(residual_decrease)
+
+        return _repr
+
+
+class FlexibleConjugateGradient(_IterativeSolver):
+    def __init__(self,
+                 linear_system: LinearSystem,
+                 x0: numpy.ndarray = None,
+                 m: int = numpy.Inf,
+                 tol: float = 1e-5,
+                 maxiter: int = None) -> None:
+        """
+        Abstract class for the (Preconditioned) Conjugate Gradient algorithm implementation.
+
+        :param linear_system: Linear system to be solved.
+        :param x0: Initial guess for the linear system solution.
+        :param m: Length of the re-orthogonalization window.
+        :param tol: Relative tolerance threshold under which the algorithm is stopped.
+        :param maxiter: Maximum number of iterations affordable before stopping the method.
+        """
+        # Sanitize the linear system argument
+        if linear_system.linear_op.shape[0] != linear_system.linear_op.shape[1]:
+            raise AssumptionError('Conjugate Gradient only apply to squared operators.')
+
+        if linear_system.block:
+            raise AssumptionError('Conjugate Gradient only apply to single right-hand side.')
+
+        # Sanitize the Arnoldi relation storage argument
+        self.m = m
+
+        # Instantiate iterative solver base class
+        super().__init__(linear_system,
+                         x0=x0,
+                         tol=tol,
+                         maxiter=maxiter)
+
+    def _solve(self) -> None:
+        k = 0
+
+        # Initialize the algorithm
+        with self.timers['A']:
+            rk = self.linear_system.get_residual(self.x0)
+
+        with self.timers['M']:
+            zk = self.M.dot(rk)
+
+        pk = numpy.copy(zk)
+
+        rhos = list([float(zk.T @ rk)])
+        pks, qks, dks = list([pk]), list(), list()
+
+        self.residue_norms.append(rhos[-1]**0.5)
+
+        # Relative tolerance with respect to ||b||_M
+        self.tol = self.tol * (norm(self.linear_system.rhs, ip_B=self.M))
+
+        while self.residue_norms[-1] > self.tol and k < self.maxiter:
+            with self.timers['A']:
+                qk = self.linear_system.linear_op.dot(pk)
+            dk = pk.T @ qk
+            alpha = rhos[-1] / dk
+
+            if len(qks) == self.m:
+                del qks[0], dks[0]
+            qks.append(qk)
+            dks.append(dk)
+
+            self.yk += alpha * pk
+
+            rk = rk - alpha * qk
+            with self.timers['M']:
+                zk = self.M.dot(rk)
+
+            rhos.append(float(zk.T @ rk))
+            self.residue_norms.append(rhos[-1]**0.5)
+
+            pk = zk
+            with self.timers['Ro']:
+                for i in range(len(qks)):
+                    pk -= (zk.T @ qks[i]) / dks[i] * pks[i]
+
+            if len(pks) == self.m:
+                del pks[0]
+            pks.append(pk)
+
+            k = k + 1
+
+        self.xk = self.x0 + self.yk
+        self.N = k
+
+    def _finalize(self) -> None:
+        # Scale the residuals norms
+        self.residue_norms = numpy.asarray(self.residue_norms) / self.residue_norms[0]
+
+        for key, value in self.timers.items():
+            self.timers[key] = self.timers[key].total_elapsed
+
+    def __repr__(self):
+        """
+        Provide a readable report of the Conjugate Gradient algorithm results.
+        """
         n_iterations = self.N
         final_residual = self.residue_norms[-1]
         residual_decrease = self.residue_norms[-1] / self.residue_norms[0]
@@ -321,7 +444,7 @@ class DeflatedConjugateGradient(ConjugateGradient):
     def __init__(self,
                  linear_system: LinearSystem,
                  subspace: Subspace,
-                 factorize: bool = False,
+                 factorized: bool = False,
                  x0: numpy.ndarray = None,
                  tol: float = 1e-5,
                  maxiter: int = None,
@@ -331,7 +454,7 @@ class DeflatedConjugateGradient(ConjugateGradient):
 
         :param linear_system: Linear system to be solved.
         :param subspace: matrix representation of subspace to use for deflation.
-        :param factorize: either to process a factorization of the subspace matrix.
+        :param factorized: either to process a factorization of the subspace matrix.
         :param x0: Initial guess for the linear system solution.
         :param tol: Relative tolerance threshold under which the algorithm is stopped.
         :param maxiter: Maximum number of iterations affordable before stopping the method.
@@ -343,20 +466,24 @@ class DeflatedConjugateGradient(ConjugateGradient):
         M = linear_system.M
 
         # Compute deflated linear system
-        self.P = Projector(subspace, factorize=factorize, ip_B=A)
-        deflated_A = A @ (IdentityOperator(b.size) - self.P)
+        self.P = OrthogonalProjector(subspace, ip_B=A, factorized=factorized)
+        deflated_A = (IdentityOperator(b.size) - self.P.T) @ A
         deflated_b = b - self.P.T.dot(b)
         deflated_linsys = LinearSystem(deflated_A, deflated_b, M)
 
         # Adjust tolerance
+        temp = tol
         tol = tol * norm(b, ip_B=M) / norm(deflated_b, ip_B=M)
+        print("Initial = {:1.4e}  |  Corrected = {:1.4e}".format(temp, tol))
 
         # Instantiate conjugate gradient base class
         super().__init__(deflated_linsys, x0, tol, maxiter, store_arnoldi)
 
         # Correction of the deflated solution to get initial linear system solution
-        Q = CoarseGridCorrection(A, subspace)
-        self.xk = Q.dot(b) + self.P.apply_complement(self.xk)
+        correction = self.P.V.T.dot(b)
+        scipy.linalg.cho_solve(self.P.L_factor, correction, overwrite_b=True)
+        correction = self.P.V.dot(correction)
+        self.xk = correction + self.xk - self.P.dot(self.xk)
 
 
 class BlockConjugateGradient(_IterativeSolver):
@@ -410,7 +537,8 @@ class BlockConjugateGradient(_IterativeSolver):
 
         # Initialize the algorithm with scaled residual R_0, then Z_0 and P_0
         if isinstance(self.M, list):
-            self.scaling = numpy.asarray([norm(self.linear_system.rhs[:, [i]], ip_B=self.M[i]) for i in range(len(self.M))])
+            self.scaling = numpy.asarray([norm(self.linear_system.rhs[:, [i]], ip_B=self.M[i])
+                                          for i in range(len(self.M))])
         else:
             self.scaling = norm(self.linear_system.rhs, ip_B=self.M)
 
