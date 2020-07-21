@@ -65,7 +65,7 @@ def norm(x: MatrixType, ip_B: LinearOperator = None) -> Union[float, numpy.ndarr
         return numpy.asarray(norms)
 
 
-def qr(X: MatrixType, ip_B: LinearOperator = None, passes: int = 1) -> Tuple[numpy.ndarray, numpy.ndarray]:
+def qr(X: MatrixType, ip_B: LinearOperator = None, passes: int = 0) -> Tuple[numpy.ndarray, numpy.ndarray]:
     """
     QR factorization with customizable inner product.
 
@@ -73,25 +73,30 @@ def qr(X: MatrixType, ip_B: LinearOperator = None, passes: int = 1) -> Tuple[num
     :param ip_B: inner product, a self-adjoint, positive-definite linear operator.
     :param passes: number of re-orthogonalizations.
     """
-    if scipy.sparse.isspmatrix(X):
+    if isinstance(X, LinearOperator) and hasattr(X, 'mat'):
+        X = X.mat
+
+    if isinstance(X, scipy.sparse.spmatrix):
         X = X.todense()
 
-    if ip_B is None and X.shape[1] > 0:
+    if ip_B is None:
         return scipy.linalg.qr(X, mode='economic')
-    else:
-        _, k = X.shape
-        Q = X.copy()
-        R = numpy.zeros((k, k), dtype=X.dtype)
-        for i in range(k):
-            for _ in range(passes+1):
-                for j in range(i):
-                    alpha = inner(Q[:, [j]], Q[:, [i]], ip_B=ip_B)[0, 0]
-                    R[j, i] += alpha
-                    Q[:, [i]] -= alpha * Q[:, [j]]
-            R[i, i] = norm(Q[:, [i]], ip_B=ip_B)
-            if R[i, i] >= 1e-15:
-                Q[:, [i]] /= R[i, i]
-        return Q, R
+
+    Q = X.copy()
+    _, k = X.shape
+    R = numpy.zeros((k, k), dtype=X.dtype)
+    for i in range(k):
+        for _ in range(passes + 1):
+            for j in range(i):
+                alpha = float(inner(Q[:, [j]], Q[:, [i]], ip_B=ip_B))
+                R[j, i] += alpha
+                Q[:, [i]] -= alpha * Q[:, [j]]
+
+        R[i, i] = norm(Q[:, [i]], ip_B=ip_B)
+        if R[i, i] >= 1e-15:
+            Q[:, [i]] /= R[i, i]
+
+    return Q, R
 
 
 def angles(F, G, ip_B=None, compute_vectors=False, degree=False):
