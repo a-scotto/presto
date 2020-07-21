@@ -20,6 +20,8 @@ import scipy.optimize
 from typing import List, Tuple
 from core.algebra import LinearOperator
 
+__all__ = ['Timer', 'compute_subspace_dim', 'report_init', 'merge_reports', 'load_operator', 'random_surjection']
+
 
 class UtilsError(Exception):
     """
@@ -32,10 +34,10 @@ class Timer:
     Timer class allowing to time block of code in a context manager. The opening of the context manager takes a label as
     argument so as to gather different timings in a single object.
     """
-    def __init__(self):
-        self.timings = dict()
+    def __init__(self, name: str):
+        self.name = name
         self._start_time = None
-        self._current = None
+        self.total_elapsed = 0.
 
     def start(self):
         """
@@ -49,22 +51,8 @@ class Timer:
         """
         elapsed_time = time.perf_counter() - self._start_time
 
-        if self._current in self.timings.keys():
-            self.timings[self._current] += elapsed_time
-        else:
-            self.timings[self._current] = elapsed_time
-
         self._start_time = None
-        self._current = None
-
-        return elapsed_time
-
-    def time(self, name):
-        """
-        Store the labeling of the context manager when opened.
-        """
-        self._current = name
-        return self
+        self.total_elapsed += elapsed_time
 
     def __enter__(self):
         """
@@ -199,19 +187,14 @@ def load_operator(OPERATOR_FILE_PATH: str, display: bool = False) -> LinearOpera
 
 
 def random_surjection(n: int, k: int) -> numpy.ndarray:
+    """
+    Generate a random surjection output from {1, n} into {1, k}. Return an array of shape (n,) with all elements in
+    {1, k} with integers from 1 to k present at least once.
 
-    if k / n > 1 / numpy.log(n / 0.05):
-        warnings.warn('Ratio "k/n" might not exceed {:1.2f}% for efficient random surjection draw.'
-                      .format(100 / numpy.log(n / 0.05)))
-
+    :param n: Number of elements in the initial set
+    :param k: Number of elements in the target set
+    """
     # Draw random map from n to k
-    surjection = numpy.random.randint(k, size=n)
-    unique = numpy.unique(surjection, return_counts=False)
-
-    # Check surjectivity
-    while len(unique) != k:
-        surjection = numpy.random.randint(k, size=n)
-        unique = numpy.unique(surjection, return_counts=False)
-
-    return surjection
-
+    output = numpy.hstack([numpy.arange(k), numpy.random.randint(k, size=n - k)])
+    numpy.random.shuffle(output)
+    return output
