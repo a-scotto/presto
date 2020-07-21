@@ -16,7 +16,7 @@ import argparse
 import scipy.io
 import scipy.sparse
 
-from core.linop import MatrixOperator
+from core.algebra import MatrixOperator
 
 # Parse command line argument
 parser = argparse.ArgumentParser()
