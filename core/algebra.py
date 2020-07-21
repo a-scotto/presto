@@ -105,6 +105,8 @@ class LinearOperator(scipyLinearOperator):
     def __mul__(self, other):
         if isinstance(other, LinearSubspace):
             return _ImageLinearSubspace(self, other)
+        elif isinstance(other, (numpy.ndarray, scipy.sparse.spmatrix)):
+            return self.dot(other)
         else:
             return _ComposedLinearOperator(self, other)
 
@@ -304,6 +306,8 @@ class LinearSubspace(LinearOperator):
         if (isinstance(other, LinearOperator) and not isinstance(other, LinearSubspace))\
                 and isinstance(self, _AdjointLinearSubspace):
             return _ImageLinearSubspace(other, self.T).T
+        elif isinstance(other, (numpy.ndarray, scipy.sparse.spmatrix)):
+            return self.dot(other)
         else:
             return _ComposedLinearSubspace(self, other)
 
@@ -355,12 +359,12 @@ class _SummedLinearSubspace(LinearSubspace):
 
     def _mat(self):
         mat1, mat2 = self.operands[0].mat, self.operands[1].mat
-        if scipy.sparse.isspmatrix(mat1) and scipy.sparse.isspmatrix(mat1):
+        if scipy.sparse.isspmatrix(mat1) and scipy.sparse.isspmatrix(mat2):
             return scipy.sparse.hstack([self.operands[0].mat, self.operands[1].mat])
-        elif not scipy.sparse.isspmatrix(mat1) and scipy.sparse.isspmatrix(mat1):
-            return numpy.hstack([self.operands[0].mat.todense(), self.operands[1].mat])
-        elif scipy.sparse.isspmatrix(mat1) and not scipy.sparse.isspmatrix(mat1):
+        elif not scipy.sparse.isspmatrix(mat1) and scipy.sparse.isspmatrix(mat2):
             return numpy.hstack([self.operands[0].mat, self.operands[1].mat.todense()])
+        elif scipy.sparse.isspmatrix(mat1) and not scipy.sparse.isspmatrix(mat2):
+            return numpy.hstack([self.operands[0].mat.todense(), self.operands[1].mat])
         else:
             return numpy.hstack([self.operands[0].mat, self.operands[1].mat])
 
@@ -512,6 +516,8 @@ class Preconditioner(LinearOperator):
     def __mul__(self, other):
         if isinstance(other, Preconditioner):
             return _ComposedPreconditioner(self, other)
+        elif isinstance(other, (numpy.ndarray, scipy.sparse.spmatrix)):
+            return self.dot(other)
         else:
             return _ComposedLinearOperator(self, other)
 
