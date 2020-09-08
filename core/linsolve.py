@@ -472,9 +472,7 @@ class DeflatedConjugateGradient(ConjugateGradient):
         deflated_linsys = LinearSystem(deflated_A, deflated_b, M)
 
         # Adjust tolerance
-        temp = tol
         tol = tol * norm(b, ip_B=M) / norm(deflated_b, ip_B=M)
-        print("Initial = {:1.4e}  |  Corrected = {:1.4e}".format(temp, tol))
 
         # Instantiate conjugate gradient base class
         super().__init__(deflated_linsys, x0, tol, maxiter, store_arnoldi)
