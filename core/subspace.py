@@ -506,7 +506,7 @@ class RandomSplit(_SubspaceGenerator):
         self.r0 = linear_system.rhs if x0 is None else linear_system.get_residual(x0)
         self.d = linear_system.linear_op.mat.diagonal()
 
-    def get(self, k: int, x: numpy.ndarray = None) -> Subspace:
+    def get(self, k: int, x: numpy.ndarray, seed: int =None) -> Subspace:
         """
         Draw a subspace from the random split distribution of dimension k. The subspace is by default generated from the
         initial residual r0 of the linear system, but can be constructed from any n-dimensional vector x.
@@ -514,19 +514,22 @@ class RandomSplit(_SubspaceGenerator):
         :param k: Number of vectors making up the expected subspace.
         :param x: Vector to optionally build the subspace from.
         """
-        n = self.r0.size
+        x = x.reshape(-1, 1) if x.ndim == 1 else x
+        n, d = x.shape
+
+        if seed is not None:
+            numpy.random.seed(seed)
 
         # Initialize subspace in dok format to allow easy update
-        subspace = scipy.sparse.dok_matrix((n, k))
+        subspace = scipy.sparse.dok_matrix((n, k * d))
 
         # Draw columns indices
         cols = random_surjection(n, k)
-        index = numpy.arange(n)
+        rows = numpy.arange(n)
 
         # Fill-in with coefficients of linear system's right-hand side or provided vector x
-        # content = self.r0.T if x is None else x.T
-        content = self.r0.T / self.d.T if x is None else x.T
-        subspace[index, cols] = content
+        for i in range(d):
+            subspace[rows, (k * i) + cols] = x[:, i].reshape(-1)
 
         return Subspace(subspace.tocsr())
 
