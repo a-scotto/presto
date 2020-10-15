@@ -14,7 +14,6 @@ import warnings
 import scipy.sparse
 
 from typing import Union
-from utils.linalg import qr
 from scipy.sparse.linalg import LinearOperator as scipyLinearOperator
 
 __all__ = ['LinearOperator', 'IdentityOperator', 'LinearSubspace', 'Subspace', 'MatrixOperator', 'OrthogonalProjector',
@@ -240,7 +239,10 @@ class _ComposedLinearOperator(LinearOperator):
         return self.operands[0].matvec_cost + self.operands[1].matvec_cost
 
     def _mat(self):
-        return self.operands[0].mat @ self.operands[1].mat
+        try:
+            return self.operands[0] @ self.operands[1].mat
+        except ValueError:
+            return self.operands[0] @ self.operands[1].mat.todense()
 
 
 class _AdjointLinearOperator(LinearOperator):
@@ -305,7 +307,7 @@ class LinearSubspace(LinearOperator):
     def __mul__(self, other):
         if (isinstance(other, LinearOperator) and not isinstance(other, LinearSubspace))\
                 and isinstance(self, _AdjointLinearSubspace):
-            return _ImageLinearSubspace(other, self.T).T
+            return _ImageLinearSubspace(other, self._adjoint()).T
         elif isinstance(other, (numpy.ndarray, scipy.sparse.spmatrix)):
             return self.dot(other)
         else:
@@ -405,7 +407,10 @@ class _ComposedLinearSubspace(LinearSubspace):
         return self.operands[0].matvec_cost + self.operands[1].matvec_cost
 
     def _mat(self):
-        return self.operands[0].mat @ self.operands[1].mat
+        try:
+            return self.operands[0] @ self.operands[1].mat
+        except ValueError:
+            return self.operands[0] @ self.operands[1].mat.todense()
 
 
 class _ImageLinearSubspace(LinearSubspace):
@@ -444,7 +449,10 @@ class _ImageLinearSubspace(LinearSubspace):
         return self.operands[0].matvec_cost + self.operands[1].matvec_cost
 
     def _mat(self):
-        return self.operands[0].mat @ self.operands[1].mat
+        try:
+            return self.operands[0] @ self.operands[1].mat
+        except ValueError:
+            return self.operands[0] @ self.operands[1].mat.todense()
 
 
 class _AdjointLinearSubspace(LinearSubspace):
@@ -554,7 +562,7 @@ class _ScaledPreconditioner(Preconditioner):
         return self.operands[0] * self.operands[1].dot(x)
 
     def _rmatvec(self, x):
-        return numpy.conj(self.operands[0]) * self.operands[1].H.dot(x)
+        return numpy.conj(self.operands[0]) * self.operands[1].T.dot(x)
 
     def _matvec_cost(self):
         n, _ = self.operands[1].shape
@@ -588,7 +596,7 @@ class _SummedPreconditioner(Preconditioner):
         return self.operands[0].dot(x) + self.operands[1].dot(x)
 
     def _rmatvec(self, x):
-        return self.operands[0].H.dot(x) + self.operands[1].H.dot(x)
+        return self.operands[0].T.dot(x) + self.operands[1].T.dot(x)
 
     def _matvec_cost(self):
         n, _ = self.operands[0].shape
@@ -684,7 +692,7 @@ class MatrixOperator(LinearOperator):
 
     def _rmatvec(self, x):
         x = numpy.asanyarray(x)
-        return self.matrix.H.dot(x)
+        return self.matrix.dot(x)
 
     def _matvec_cost(self):
         return 2 * self.matrix.size
@@ -734,14 +742,14 @@ SubspaceType = Union[LinearSubspace, numpy.ndarray, scipy.sparse.spmatrix]
 class OrthogonalProjector(LinearOperator):
     def __init__(self,
                  V: SubspaceType,
-                 factorized: bool = False,
-                 ip_B: LinearOperator = None):
+                 factorize: bool = False,
+                 ip_A: LinearOperator = None):
         """
         Abstract class for orthogonal projectors in the sens of the self-adjoint positive definite operator ip_B.
 
         :param V: subspace-type like for linear subspace onto which the projection is made.
-        :param factorized: whether to compute QR factorizations of the subspace.
-        :param ip_B: self-adjoint positive definite linear operator for which induced inner-product the projector is
+        :param factorize: whether to compute QR factorizations of the subspace.
+        :param ip_A: self-adjoint positive definite linear operator for which induced inner-product the projector is
             orthogonal
         """
         # Sanitize the subspace argument
@@ -749,54 +757,57 @@ class OrthogonalProjector(LinearOperator):
             raise LinearOperatorError('Subspaces must be of subspace type format but received {}'
                                       .format(type(V)))
 
+        n, _ = V.shape
         self.V = Subspace(V) if not isinstance(V, LinearSubspace) else V
-        self.factorized = factorized
-        n, _ = self.V.shape
-        self.ip_B = IdentityOperator(n) if ip_B is None else ip_B
+        self.ip_A = IdentityOperator(n) if ip_A is None else ip_A
+        self.factorize = factorize
+
+        self.AV = self.ip_A @ self.V
+        self.L_factor = (self.V.T @ self.AV).mat
+        self.L_factor = self.L_factor.todense() if scipy.sparse.isspmatrix(self.L_factor) else self.L_factor
+        self.L_factor = scipy.linalg.cho_factor(self.L_factor, lower=True, overwrite_a=False)
 
         # Process QR factorization in case of orthogonal projection if asked to
-        if self.factorized:
-            self.VQ, _ = qr(V, ip_B=ip_B)
-            self.AVQ = self.ip_B.dot(self.VQ)
-            self.L_factor = None
-            self.AV = None
-        else:
-            self.AV = self.ip_B @ self.V
-            M = (self.V.T @ self.AV).mat
+        if self.factorize:
             try:
-                M = M.todense()
-            except AttributeError:
-                pass
+                self.V = Subspace(scipy.linalg.solve_triangular(self.L_factor[0], self.V.mat.T, lower=True).T)
+            except ValueError:
+                self.V = Subspace(scipy.linalg.solve_triangular(self.L_factor[0], self.V.mat.todense().T, lower=True).T)
 
-            self.L_factor = scipy.linalg.cho_factor(M, lower=True)
-            self.VQ = None
-            self.AVQ = None
+            self.AV = Subspace(scipy.linalg.solve_triangular(self.L_factor[0], self.AV.mat.T, lower=True).T)
 
         dtype = self.V.dtype
         super().__init__(dtype, (n, n))
 
+        # Set complementary projector
+        self.complementary = IdentityOperator(n) - self
+
     def _matvec(self, x):
-        if self.factorized:
-            y = self.AVQ.T.dot(x)
-            y = self.VQ.dot(y)
-        else:
-            y = self.AV.T.dot(x)
-            scipy.linalg.cho_solve(self.L_factor, y, overwrite_b=True)
-            y = self.V.dot(y)
+        y = self.AV.T.dot(x)
+        if not self.factorize:
+            y = scipy.linalg.cho_solve(self.L_factor, y, overwrite_b=False)
+        y = self.V.dot(y)
         return y
 
     def _rmatvec(self, x):
-        if self.factorized:
-            y = self.VQ.T.dot(x)
-            y = self.AVQ.dot(y)
-        else:
-            y = self.V.T.dot(x)
-            scipy.linalg.cho_solve(self.L_factor, y, overwrite_b=True)
-            y = self.AV.dot(y)
+        y = self.V.T.dot(x)
+        if not self.factorize:
+            y = scipy.linalg.cho_solve(self.L_factor, y, overwrite_b=False)
+        y = self.AV.dot(y)
         return y
 
     def _matvec_cost(self):
-        if self.factorized:
-            return 2 * (self.VQ.size + self.AVQ.size)
+        cost = self.V.matvec_cost + self.AV.T.matvec_cost
+        if not self.factorize:
+            cost += self.L_factor[0].size
+        return cost
+
+    def _mat(self):
+        if self.factorize:
+            return self.V @ self.AV.T.mat
         else:
-            return self.V.T.matvec_cost + 2 * (self.L_factor[0].size + self.AV.matvec_cost)
+            try:
+                Y = scipy.linalg.cho_solve(self.L_factor, self.AV.T.mat, overwrite_b=False)
+            except ValueError:
+                Y = scipy.linalg.cho_solve(self.L_factor, self.AV.T.mat.todense(), overwrite_b=False)
+            return self.V @ Y
