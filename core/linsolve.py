@@ -13,18 +13,19 @@ import numpy
 import scipy.linalg
 import scipy.sparse
 
-from typing import Union
 from utils.utils import *
 from utils.linalg import *
 from core.algebra import *
-from matplotlib import pyplot
 from core.preconditioner import *
+
+from matplotlib import pyplot
+from typing import List, Union
 
 __all__ = ['LinearSystem', 'ConjugateGradient', 'DeflatedConjugateGradient', 'BlockConjugateGradient',
            'FlexibleConjugateGradient']
 
 Subspace = Union[numpy.ndarray, scipy.sparse.spmatrix]
-# MultiPreconditioner = Union[Preconditioner, List[Preconditioner]]
+MultiPreconditioner = Union[Preconditioner, List[Preconditioner]]
 
 
 class LinearSystemError(Exception):
@@ -444,7 +445,7 @@ class DeflatedConjugateGradient(ConjugateGradient):
     def __init__(self,
                  linear_system: LinearSystem,
                  subspace: Subspace,
-                 factorized: bool = False,
+                 factorize: bool = False,
                  x0: numpy.ndarray = None,
                  tol: float = 1e-5,
                  maxiter: int = None,
@@ -454,7 +455,7 @@ class DeflatedConjugateGradient(ConjugateGradient):
 
         :param linear_system: Linear system to be solved.
         :param subspace: matrix representation of subspace to use for deflation.
-        :param factorized: either to process a factorization of the subspace matrix.
+        :param factorize: either to process a factorization of the subspace matrix.
         :param x0: Initial guess for the linear system solution.
         :param tol: Relative tolerance threshold under which the algorithm is stopped.
         :param maxiter: Maximum number of iterations affordable before stopping the method.
@@ -466,9 +467,9 @@ class DeflatedConjugateGradient(ConjugateGradient):
         M = linear_system.M
 
         # Compute deflated linear system
-        self.P = OrthogonalProjector(subspace, ip_B=A, factorized=factorized)
-        deflated_A = (IdentityOperator(b.size) - self.P.T) @ A
-        deflated_b = b - self.P.T.dot(b)
+        self.P = OrthogonalProjector(subspace, ip_A=A, factorize=factorize)
+        deflated_A = self.P.complementary.T @ A
+        deflated_b = self.P.complementary.T @ b
         deflated_linsys = LinearSystem(deflated_A, deflated_b, M)
 
         # Adjust tolerance
