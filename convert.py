@@ -51,5 +51,8 @@ for FILE_PATH in args.files:
     rhs = input('Generate random right-hand side? [y/n] ... ')
 
     if rhs == 'y':
-        b = mat.dot(numpy.random.randn(mat.shape[0], 1))
-        numpy.save('problems/' + name + '_rhs', b)
+        X = numpy.random.randn(mat.shape[0])
+        diag = scipy.sparse.diags(mat.mat.diagonal()**0.5)
+        sigma = 1 / mat.shape[0]**0.5 * numpy.linalg.norm(mat.mat.diagonal())
+        rhs = numpy.asarray([b for b in [mat @ X, diag @ X, float(sigma) * X]])
+        numpy.save('problems/' + name + '_rhs', rhs)
