@@ -18,10 +18,12 @@ import scipy.sparse
 import scipy.optimize
 
 from presto.algebra import *
-from typing import List, Tuple
+from typing import List, Tuple, Union
 
 __all__ = ['Timer', 'compute_subspace_dim', 'report_init', 'merge_reports', 'load_operator', 'random_surjection', 'qr',
            'subspace_angles']
+
+SubspaceType = Union[numpy.ndarray, scipy.sparse.spmatrix, LinearSubspace]
 
 
 class UtilsError(Exception):
@@ -192,8 +194,8 @@ def random_surjection(n: int, k: int) -> numpy.ndarray:
     Generate a random surjection output from {1, n} into {1, k}. Return an array of shape (n,) with all elements in
     {1, k} with integers from 1 to k present at least once.
 
-    :param n: Number of elements in the initial set
-    :param k: Number of elements in the target set
+    :param n: Number of elements in the initial set.
+    :param k: Number of elements in the target set.
     """
     # Draw random map from n to k
     output = numpy.hstack([numpy.arange(k), numpy.random.randint(k, size=n - k)])
@@ -201,14 +203,27 @@ def random_surjection(n: int, k: int) -> numpy.ndarray:
     return output
 
 
-def qr(V, ip_A=None):
+def norm(x: numpy.ndarray, ip_A: LinearOperator = None) -> float:
+    """
+    Compute the norm of a given vector respect associated with the inner product ip_A provided. That is, the method
+    return the square root of <x, Ax>, with <., .> being the Euclidean inner product.
+    :param x: Vector to compute the norm.
+    :param ip_A: Inner product in which the norm is computed.
+    """
+
+    result = x.T @ x if ip_A is None else x.T @ (ip_A @ x)
+
+    return float(result**0.5)
+
+
+def qr(V: SubspaceType, ip_A: LinearOperator = None) -> Tuple[numpy.ndarray, numpy.ndarray]:
     """
     Process to the QR decomposition in the inner product provided. Namely for a (n, p) matrix V, the algorithm provides
     two matrices Q and R such that V = QR with Q of shape (n, p) with its columns being conjugate with respect to the
     inner product ip_A and R of shape (p, p) upper triangular.
 
-    :param V: Block columns to orthogonalize
-    :param ip_A: Symmetric positive-definite operator as the inner product
+    :param V: Block columns to orthogonalize.
+    :param ip_A: Symmetric positive-definite operator as the inner product.
     """
 
     # Sanitize the arguments of the method
@@ -229,7 +244,11 @@ def qr(V, ip_A=None):
     return Q, R
 
 
-def subspace_angles(F, G, ip_A=None, compute_vectors=False, degree=False):
+def subspace_angles(F: SubspaceType,
+                    G: SubspaceType,
+                    ip_A: LinearOperator = None,
+                    compute_vectors: bool = False,
+                    degree: bool = False):
     """
     Principal angles between two subspaces.
 
