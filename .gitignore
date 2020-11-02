@@ -1,6 +1,2 @@
 .idea
 __pycache__
-reports/*
-operators/*
-script.py
-*.json
