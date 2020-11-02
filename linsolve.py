@@ -13,13 +13,12 @@ import numpy
 import scipy.linalg
 import scipy.sparse
 
-from utils.utils import *
-from utils.linalg import *
-from core.algebra import *
-from core.preconditioner import *
-
 from matplotlib import pyplot
 from typing import List, Union
+
+from presto.utils import *
+from presto.algebra import *
+from presto.preconditioner import *
 
 __all__ = ['LinearSystem', 'ConjugateGradient', 'DeflatedConjugateGradient', 'BlockConjugateGradient',
            'FlexibleConjugateGradient']
@@ -262,6 +261,7 @@ class ConjugateGradient(_IterativeSolver):
             self.V.append(zk / self.residue_norms[-1])
 
         # Relative tolerance with respect to ||b||_M
+        self.tol = self.tol * (norm(self.linear_system.rhs, ip_B=self.M))
         self.tol = self.tol * (norm(self.linear_system.rhs, ip_B=self.M))
 
         while self.residue_norms[-1] > self.tol and k < self.maxiter:

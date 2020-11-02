@@ -18,9 +18,9 @@ import scipy.linalg
 import scipy.sparse.linalg
 
 from typing import Union
-from core.algebra import *
-from utils.utils import random_surjection
-from core.linsolve import LinearSystem, ConjugateGradient
+from presto.utils import *
+from presto.algebra import *
+from presto.linsolve import *
 
 __all__ = ['SubspaceGenerator', 'BinarySparse', 'RandomSplit']
 

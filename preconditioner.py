@@ -15,7 +15,7 @@ import scipy.linalg
 import scipy.sparse.linalg
 import pyamg.relaxation.relaxation
 
-from core.algebra import *
+from presto.algebra import *
 from typing import Union, List
 
 __all__ = ['IdentityPreconditioner', 'Jacobi', 'BlockJacobi', 'SymmetricGaussSeidel', 'BlockSymmetricGaussSeidel',
