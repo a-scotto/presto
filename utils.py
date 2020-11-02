@@ -210,6 +210,8 @@ def norm(x: numpy.ndarray, ip_A: LinearOperator = None) -> float:
     :param x: Vector to compute the norm.
     :param ip_A: Inner product in which the norm is computed.
     """
+    if x.ndim > 1 and x.shape[1] != 1:
+        raise UtilsError('Norm method compute the norm of vectors, but given a matrix of shape {}'.format(x.shape))
 
     result = x.T @ x if ip_A is None else x.T @ (ip_A @ x)
 
