@@ -21,7 +21,7 @@ from presto.algebra import *
 from typing import List, Tuple, Union
 
 __all__ = ['Timer', 'compute_subspace_dim', 'report_init', 'merge_reports', 'load_operator', 'random_surjection', 'qr',
-           'subspace_angles']
+           'subspace_angles', 'norm']
 
 SubspaceType = Union[numpy.ndarray, scipy.sparse.spmatrix, LinearSubspace]
 
