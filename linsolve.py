@@ -261,8 +261,7 @@ class ConjugateGradient(_IterativeSolver):
             self.V.append(zk / self.residue_norms[-1])
 
         # Relative tolerance with respect to ||b||_M
-        self.tol = self.tol * (norm(self.linear_system.rhs, ip_B=self.M))
-        self.tol = self.tol * (norm(self.linear_system.rhs, ip_B=self.M))
+        self.tol = self.tol * norm(self.linear_system.rhs, ip_A=self.M)
 
         while self.residue_norms[-1] > self.tol and k < self.maxiter:
             with self.timers['A']:
@@ -383,7 +382,7 @@ class FlexibleConjugateGradient(_IterativeSolver):
         self.residue_norms.append(rhos[-1]**0.5)
 
         # Relative tolerance with respect to ||b||_M
-        self.tol = self.tol * (norm(self.linear_system.rhs, ip_B=self.M))
+        self.tol = self.tol * norm(self.linear_system.rhs, ip_A=self.M)
 
         while self.residue_norms[-1] > self.tol and k < self.maxiter:
             with self.timers['A']:
@@ -473,7 +472,7 @@ class DeflatedConjugateGradient(ConjugateGradient):
         deflated_linsys = LinearSystem(deflated_A, deflated_b, M)
 
         # Adjust tolerance
-        tol = tol * norm(b, ip_B=M) / norm(deflated_b, ip_B=M)
+        tol = tol * norm(b, ip_A=M) / norm(deflated_b, ip_A=M)
 
         # Instantiate conjugate gradient base class
         super().__init__(deflated_linsys, x0, tol, maxiter, store_arnoldi)
@@ -536,10 +535,10 @@ class BlockConjugateGradient(_IterativeSolver):
 
         # Initialize the algorithm with scaled residual R_0, then Z_0 and P_0
         if isinstance(self.M, list):
-            self.scaling = numpy.asarray([norm(self.linear_system.rhs[:, [i]], ip_B=self.M[i])
+            self.scaling = numpy.asarray([norm(self.linear_system.rhs[:, [i]], ip_A=self.M[i])
                                           for i in range(len(self.M))])
         else:
-            self.scaling = norm(self.linear_system.rhs, ip_B=self.M)
+            self.scaling = norm(self.linear_system.rhs, ip_A=self.M)
 
         Rk = self.linear_system.get_residual(self.x0) / self.scaling
 
