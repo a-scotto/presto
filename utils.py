@@ -189,16 +189,22 @@ def load_operator(OPERATOR_FILE_PATH: str, display: bool = False) -> LinearOpera
     return operator
 
 
-def random_surjection(n: int, k: int) -> numpy.ndarray:
+def random_surjection(n: int, k: int, d: int = 1) -> numpy.ndarray:
     """
     Generate a random surjection output from {1, n} into {1, k}. Return an array of shape (n,) with all elements in
     {1, k} with integers from 1 to k present at least once.
 
     :param n: Number of elements in the initial set.
     :param k: Number of elements in the target set.
+    :param d: Order of the surjection, that is the minimal number of elements with the same image.
     """
+    # Ensure compatibility of the arguments
+    if k*d > n:
+        raise UtilsError('Arguments for the surjective map are not compatible. k x d ({}) > n ({})'
+                         .format(k*d, n))
+
     # Draw random map from n to k
-    output = numpy.hstack([numpy.arange(k), numpy.random.randint(k, size=n - k)])
+    output = numpy.hstack([numpy.arange(k)]*d + [numpy.random.randint(k, size=n - k*d)])
     numpy.random.shuffle(output)
     return output
 
