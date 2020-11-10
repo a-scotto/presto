@@ -66,9 +66,6 @@ class Jacobi(Preconditioner):
         else:
             diagonal = numpy.diag(matrix_repr)
 
-        # Handle potential zeros in the diagonal elements
-        diagonal[diagonal == 0] += 1.
-
         self._diagonal = scipy.sparse.diags(1. / diagonal)
 
         super().__init__(linear_op)
