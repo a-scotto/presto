@@ -449,62 +449,20 @@ class Nystrom(_SubspaceGenerator):
         return 2. * self.linear_op.shape[0] * k
 
 
-class BinarySparse(_SubspaceGenerator):
-    def __init__(self, n: int):
-        """
-        Generator of binary sparse subspace, that is a distribution of very sparse random column block.
-
-        :param n: Dimension of the vector space.
-        """
-        # Sanitize arguments
-        if not isinstance(n, int):
-            raise SubspaceGeneratorError('Dimension of the vector space must ba natural number.')
-
-        self.n = n
-
-    def get(self, k: int) -> Subspace:
-        """
-        Draw a subspace from the binary sparse distribution of dimension k. The block vector is made up of coefficient
-        among {-1, 1}.
-
-        :param k: Number of vectors making up the expected subspace.
-        """
-        # Initialize subspace in dok format to allow easy update
-        subspace = scipy.sparse.dok_matrix((self.n, k))
-
-        # Draw columns indices
-        cols = random_surjection(self.n, k)
-        index = numpy.arange(self.n)
-
-        # Fill-in with coefficients in {-1, 1}
-        subspace[index, cols] = (2 * numpy.random.randint(0, 2, size=self.n) - 1)
-
-        return Subspace(subspace.tocsr())
-
-    def cost(self, k: int, *args, **kwargs):
-        return self.n
-
-    def rcost(self, k: int, *args, **kwargs):
-        return 2 * self.n
-
-
 class RandomSplit(_SubspaceGenerator):
-    def __init__(self, linear_system: LinearSystem, x0: numpy.ndarray = None):
+    def __init__(self, n: int):
         """
         Generator of random split subspace, that is a distribution of very sparse random column block.
 
-        :param linear_system: Linear system from which the initial residual is extracted.
-        :param x0: Initial guess to compute the initial residual.
+        :param n: Dimension of the vector space from which the RandomSplit subspaces are drawn.
         """
         # Sanitize arguments
-        if not isinstance(linear_system, LinearSystem):
-            raise SubspaceGeneratorError('Linear system must be an instance of LinearSystem.')
+        if not isinstance(n, int):
+            raise SubspaceGeneratorError('Dimension of the vector space must be a positive integer.')
+        if n <= 0:
+            raise SubspaceGeneratorError('Dimension of the vector space must be a positive integer.')
 
-        if x0 is not None and not isinstance(x0, numpy.ndarray):
-            raise SubspaceGeneratorError('Initial guess must be a numpy.ndarray.')
-
-        self.r0 = linear_system.rhs if x0 is None else linear_system.get_residual(x0)
-        self.d = linear_system.linear_op.mat.diagonal()
+        self.n = n
 
     def get(self, k: int, x: numpy.ndarray, seed: int = None) -> Subspace:
         """
@@ -515,30 +473,39 @@ class RandomSplit(_SubspaceGenerator):
         :param x: Vector to optionally build the subspace from.
         :param seed: Random seed to set for reproducibility.
         """
+
+        # Sanitize arguments
         x = x.reshape(-1, 1) if x.ndim == 1 else x
-        n, d = x.shape
+
+        if x.ndim > 2:
+            raise SubspaceError('Block vector matrices must be of shape (n, p), received {}.'.format(x.shape))
+
+        if x.shape[0] != self.n:
+            raise SubspaceError('Vectors provided must be of dimension {}, received {}.'.format(self.n, x.shape[0]))
+
+        _, d = x.shape
 
         if seed is not None:
             numpy.random.seed(seed)
 
         # Initialize subspace in dok format to allow easy update
-        subspace = scipy.sparse.dok_matrix((n, k * d))
+        subspace = scipy.sparse.dok_matrix((self.n, k * d))
 
         # Draw columns indices
-        cols = random_surjection(n, k)
-        rows = numpy.arange(n)
+        cols = random_surjection(self.n, k, d)
+        rows = numpy.arange(self.n)
 
-        # Fill-in with coefficients of linear system's right-hand side or provided vector x
+        # Fill-in with matrix x provided
         for i in range(d):
             subspace[rows, (k * i) + cols] = x[:, i].reshape(-1)
 
         return Subspace(subspace.tocsr())
 
     def cost(self, k: int, *args, **kwargs):
-        return self.r0.size
+        return 2 * self.n
 
     def rcost(self, k: int, *args, **kwargs):
-        return 2 * self.r0.size
+        return 2 * self.n
 
 
 class RandomAMG(_SubspaceGenerator):
